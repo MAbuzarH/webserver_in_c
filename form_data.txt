@@ -1,0 +1,16 @@
+name=abuzar&message=hi+hio+hjh+
+name=abu&message=hi+hio+hjh++jjj
+name=j&message=hagah
+[2025-08-22 14:29:16] Name: abuzar, Message: how are you 
+[2025-08-22 14:29:29] Name: abuzar, Message: how are you 
+[2025-08-22 14:32:38] Name: abuzar, Message: how are you 
+[2025-08-22 14:33:50] Name: ali , Message: good
+[2025-08-22 14:48:36] Name: jon, Message: what is this .
+[2025-08-22 15:07:02] Name: Qasam, Message: what is this hello .
+[2025-08-22 15:29:52] Name: poul, Message: good 
+[2025-08-22 15:45:57] Name: poul, Message: good boy what are you doing
+[2025-08-22 18:40:27] Name: ali asam, Message: hello good to se you
+[2025-08-22 19:26:01] Name: jafar shah, Message: such btao k is chandni 
+[2025-08-22 19:30:02] Name: Abuzar shah, Message: dukha
+[2025-08-22 19:33:04] Name: Abuzar shah, Message: to tumko
+[2025-08-22 19:33:37] Name: didd, Message: good boy
