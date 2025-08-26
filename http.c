@@ -42,7 +42,7 @@ struct FormData {
     char name[MAX_USERNAME_LEN];
     char message[512];
     char username[MAX_USERNAME_LEN];
-    char password[MAX_PASSWORD_LEN]
+    char password[MAX_PASSWORD_LEN];
 };
 
 // Global error message buffer.
@@ -113,27 +113,30 @@ if(username_end){
 size_t username_len = username_end - username_start;
 strncpy(data.username,username_start , username_len > sizeof(data.username)-1 ? sizeof(data.username)-1: username_len);
 data.username[username_len > sizeof(data.username)-1 ? sizeof(data.username)-1:username_len] ='\0';
+printf("user name parsed successfully: %s \n",data.username);
 }else{
     strncpy(data.username, username_start,sizeof(data.username)-1);
-    data.username[sizeof(data.username)-1] ='/0';
+    data.username[sizeof(data.username)-1] ='\0';
+    // printf("user name parsed successfully: %s \n",data.username);
 }
 }
 
 if(password_start){
  char *password_end; 
  password_start += strlen("password=");
- password_end = strch(password_end,'&');
- if(password_end){
+//  password_end = strch(password_end,'&');
+//  if(password_end){
 
-size_t password_len = password_end - password_start;
+// size_t password_len = password_end - password_start;
 
-strncpy(data.password, password_start, password_len > sizeof(data.password)-1 ? sizeof(data.password)-1 : password_len);
-data.password[password_len > sizeof(password_start)-1 ? sizeof(password_start)-1 : password_len]='/0';
+// strncpy(data.password, password_start, password_len > sizeof(data.password)-1 ? sizeof(data.password)-1 : password_len);
+// data.password[password_len > sizeof(password_start)-1 ? sizeof(password_start)-1 : password_len]='\0';
 
- }  else{
+//  }  else{
    strncpy(data.password , password_start, sizeof(password_start)-1);
-   data.password[sizeof(data.password)-1] = '/0';
- }
+   data.password[sizeof(data.password)-1] = '\0';
+//    printf("password parsed successfully: %s \n",data.password);
+//  }
 }
 
 urldecode(username_start,data.username);
@@ -574,16 +577,77 @@ void cli_conn(int c) {
         // Correctly find the body data after the headers.
         char *header_end = strstr(full_request_data, "\r\n\r\n");
         char *body_data = NULL;
-        
-        if (header_end) {
+       if (header_end) {
             body_data = header_end + 4;
-            printf("Received POST body: %s\n", body_data);
+
+           if(strcmp(req->url,"/register")==0){
+
+           // printf("Received POST body in register: %s\n", body_data);
+           struct FormData user_data = parse_user_data(body_data);
+           // printf("in reg user_name: %s user_pas: %s \n", user_data.username,user_data.password);
+           if(strlen(user_data.username) > 0 && strlen(user_data.password) > 0){
+            if(register_user(user_data.username,user_data.password)){
+                res = " <p>registraition sucessfull <p> ";
+                http_send_response(c, 200, "text/html", res, strlen(res));
+            }else{
+                res = "<h2>Registration Failed</h2><p>User already exists or server error.</p>";
+                 http_send_response(c, 200, "text/html", res, strlen(res));
+            }
+           }else{
+            res = "Bad Request: missing username and password";
+            http_send_response(c,400,"text/plain",res,strlen(res));
+           }
+           }else if(strcmp(req->url,"/login")==0){
+            // printf("Received POST body in login: %s\n", body_data);
+             struct FormData user_data = parse_user_data(body_data);
+             // printf("in log user_name: %s user_pas %s \n", user_data.username,user_data.password);
+             if(strlen(user_data.username) > 0 && strlen(user_data.password)>0){
+              if(authenticate_user(user_data.username,user_data.password)){
+                res = "<h2> Loging Sucessful</h2> <p> Wellcom";
+                char sucess_msg[512];
+                snprintf(sucess_msg,sizeof(sucess_msg),"%s%s</p>",res,user_data.username);
+                http_send_response(c,200,"text/html",sucess_msg,strlen(sucess_msg));
+              }else{
+                res = "<h2>Login Failed</h2><p>Invalid username or password.</p>";
+                http_send_response(c, 200, "text/html", res,
+                            strlen(res));
+              }
+             }else{
+                res = "Bad request";
+                http_send_response(c,400,"text/plain",res,strlen(res));
+             }
+           }else if(strcmp(req->url,"/form")==0){
+
+             printf("Received POST body in form: %s\n", body_data);
 
             // 1. Parse the raw POST data into a structured format
-            struct FormData form_data = parse_user_data(body_data);
-     
+            struct FormData form_data ;
+            
             // 2. Open the file in append mode ("a") and format the output
             FILE *fp = fopen("form_data.txt", "a");
+           char *name_start = strstr(body_data, "name=");
+            char *message_start = strstr(body_data, "message=");
+if(name_start){
+ name_start += strlen("name=");
+                    char *name_end = strchr(name_start, '&');
+                    if (name_end) {
+                        size_t name_len = name_end - name_start;
+                        strncpy(form_data.name, name_start, name_len > sizeof(form_data.name) - 1 ? sizeof(form_data.name) - 1 : name_len);
+                        form_data.name[name_len > sizeof(form_data.name) - 1 ? sizeof(form_data.name) - 1 : name_len] = '\0';
+                        urldecode(form_data.name, form_data.name);
+                    } else {
+                        strncpy(form_data.name, name_start, sizeof(form_data.name) - 1);
+                        form_data.name[sizeof(form_data.name) - 1] = '\0';
+                        urldecode(form_data.name, form_data.name);
+                    }
+}
+if(message_start){
+      message_start += strlen("message=");
+                    size_t message_len = strlen(message_start);
+                    strncpy(form_data.message, message_start, message_len > sizeof(form_data.message) - 1 ? sizeof(form_data.message) - 1 : message_len);
+                    form_data.message[message_len > sizeof(form_data.message) - 1 ? sizeof(form_data.message) - 1 : message_len] = '\0';
+                    urldecode(form_data.message, form_data.message);
+}
             if (fp != NULL) {
                 time_t now = time(NULL);
                 struct tm time_info; // New local struct for time info
@@ -604,14 +668,17 @@ void cli_conn(int c) {
                 // This `else` block now correctly logs an error but does not send an incorrect response
                 perror("fopen failed to create form_data.txt");
             }
-
-            // The success response is now sent after all file operations,
+             // The success response is now sent after all file operations,
             // regardless of whether the file was successfully opened.
             // This ensures a 200 OK response is always sent for a valid POST request.
-            f = fileread("./success.html");
+            //f = fileread("./success.html");
             res = "<h2>Data Submitted Successfully!</h2><p>Check the form_data.txt file on the server.</p>";
-            // http_send_response(c, 200, "text/html", res, strlen(res));
-            http_send_response(c, 200, "text/html", f->fc, f->size);
+            http_send_response(c, 200, "text/html", res, strlen(res));
+           }else{
+             //other routes 
+           }
+
+           
         } else {
             fprintf(stderr, "Error: No header end found in POST request.\n");
             res = "Bad Request";
