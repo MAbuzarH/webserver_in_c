@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+
 /**
  * @brief Checks if a user's credentials are valid.
  * @param username The username to check.

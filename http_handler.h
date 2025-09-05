@@ -142,7 +142,8 @@ typedef struct {
 char *read_full_request(int client_socket);
 httpreq *parse_http(const char *request);
 void http_send_response(int client_socket, int status_code, const char *content_type, const char *body, size_t body_len);
-void http_send_dashboard(int client_socket, const char *username);
+//void http_send_dashboard(int client_socket, const char *username);
+void http_send_dashboard(int client_socket, const char *username, const char *path);
 void http_send_login_page(int client_socket);
 void http_send_register_page(int client_socket);
 void http_send_welcome_page(int client_socket);
@@ -150,12 +151,13 @@ void http_send_redirect(int client_socket, const char *location);
 void http_send_redirect_with_cookie(int client_socket, const char *location, const char *session_id);
 const char *get_session_id_from_request(const char *request);
 void urldecode(char *dest, const char *src);
-bool http_handle_upload(const char *request, const char *username);
+//bool http_handle_upload(const char *request, const char *username);
 bool http_handle_delete_file(const char *request, const char *username);
 void http_handle_view_file(int client_socket, const char *url, const char *username);
 void http_send_file_for_download(int client_socket, const char *url, const char *username);
 int get_post_param(const char *body, const char *param_name, char *output, size_t output_size);
-
-
-
+bool handle_create_folder(const char *request,const char *username);
+bool http_handle_upload(int client_socket,const char *request, const char *username);
+int create_full_path(const char *path, mode_t mode);
+bool http_handle_delete_folder(const char * request,const char *username);
 #endif

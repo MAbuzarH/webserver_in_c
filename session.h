@@ -9,11 +9,11 @@
 
 #define MAX_SESSIONS 100
 #define SESSION_TIMEOUT_SEC 3600
-
+#define MAX_USERNAME_LENGTH 63
 // Represents a user session with a unique ID and associated username.
 typedef struct {
     char session_id[37]; // UUID
-    char username[256];
+    char username[MAX_USERNAME_LENGTH];
     time_t last_activity;
 } Session;
 

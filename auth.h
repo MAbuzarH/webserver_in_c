@@ -11,7 +11,7 @@
  * @param username The username to check.
  * @return true if the user exists, false otherwise.
  */
-bool user_exists(const char *username);
+// bool user_exists(const char *username);
 
 /**
  * @brief Registers a new user with a username and password.

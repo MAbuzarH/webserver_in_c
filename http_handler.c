@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
 
 #define BUFFER_SIZE 8192
 #define MAX_USERNAME_LENGTH 63
@@ -32,20 +33,104 @@ const char *find_header(const char *request, const char *header_name) {
  * @param client_socket The client socket file descriptor.
  * @return A dynamically allocated string containing the full request, or NULL on error.
  */
-char *read_full_request(int client_socket) {
-    char *buffer = malloc(BUFFER_SIZE);
-    if (!buffer) {
-        return NULL;
+// char* read_full_request(int client_socket) {
+//     char *request = NULL;
+//     size_t total_size = 0;
+//     ssize_t bytes_received;
+//     char buffer[1024];
+    
+//     // Read the headers first
+//     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+//         request = realloc(request, total_size + bytes_received + 1);
+//         memcpy(request + total_size, buffer, bytes_received);
+//         total_size += bytes_received;
+//         request[total_size] = '\0';
+        
+//         char* header_end = strstr(request, "\r\n\r\n");
+//         if (header_end) {
+//             // Found the end of headers
+//             long content_length = 0;
+//             char* cl_header = strstr(request, "Content-Length:");
+//             if (cl_header) {
+//                 content_length = atol(cl_header + 15);
+//             }
+            
+//             // Read the rest of the body based on Content-Length
+//             size_t headers_len = header_end - request + 4;
+//             size_t body_already_read = total_size - headers_len;
+//             size_t body_to_read = content_length - body_already_read;
+            
+//             while (body_to_read > 0 && (bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+//                 size_t read_this_chunk = (bytes_received < body_to_read) ? bytes_received : body_to_read;
+//                 request = realloc(request, total_size + read_this_chunk + 1);
+//                 memcpy(request + total_size, buffer, read_this_chunk);
+//                 total_size += read_this_chunk;
+//                 request[total_size] = '\0';
+//                 body_to_read -= read_this_chunk;
+//             }
+//             return request;
+//         }
+//     }
+    
+//     if (request) {
+//         free(request);
+//     }
+//     return NULL;
+// }
+char* read_full_request(int client_socket) {
+    char *request = NULL;
+    size_t total_size = 0;
+    ssize_t bytes_received;
+    char buffer[1024];
+    
+    // Read the headers first
+    while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+        request = realloc(request, total_size + bytes_received + 1);
+        memcpy(request + total_size, buffer, bytes_received);
+        total_size += bytes_received;
+        request[total_size] = '\0';
+
+        // Check for the end of headers marker
+        if (strstr(request, "\r\n\r\n")) {
+            return request;
+        }
     }
 
-    int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-    if (bytes_read <= 0) {
-        free(buffer);
+    if (bytes_received <= 0) {
+        if (request) {
+            free(request);
+        }
         return NULL;
     }
-    buffer[bytes_read] = '\0';
-    return buffer;
+    
+    return request;
 }
+// char *read_full_request(int client_socket) {
+//     char *buffer = malloc(BUFFER_SIZE);
+//     if (!buffer) {
+//         return NULL;
+//     }
+
+//     int bytes_read = 0;
+//     int total_bytes = 0;
+//     while(total_bytes < BUFFER_SIZE - 1){
+//        bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+//        if(bytes_read<=0){
+//         free(buffer);
+//         return NULL;
+//        }
+//         total_bytes += bytes_read;
+//         buffer[total_bytes]= '\0';
+//         if(strstr(buffer,"\r\n\r\n")){
+//             break;
+//         }
+//     }
+//    if(total_bytes >= BUFFER_SIZE - 1 && !strstr(buffer,"\r\n\r\n")){
+//     free(buffer);
+//     return NULL;
+//    }
+//     return buffer;
+// }
 
 /**
  * @brief Parses the HTTP request line.
@@ -197,46 +282,86 @@ void urldecode(char *dest, const char *src) {
     dest[j] = '\0';
 }
 
+
 /**
  * @brief Sends the dashboard page to the client.
  * @param client_socket The client socket.
  * @param username The username to display.
+ * @param path The current path within the user's directory.
  */
-void http_send_dashboard(int client_socket, const char *username) {
+void http_send_dashboard(int client_socket, const char *username, const char *path) {
     char body[8192];
-    char user_files_path[256];
-    snprintf(user_files_path, sizeof(user_files_path), "user_files/%s", username);
+    char full_path[512];
+    snprintf(full_path, sizeof(full_path), "user_files/%s%s", username, path);
 
     char file_list_html[4096] = "";
     
-     DIR *dir = opendir(user_files_path);
+    DIR *dir = opendir(full_path);
     if (dir) {
+        // Add a "Go Up" link if not in the root directory
+        if (strcmp(path, "/") != 0) {
+            char parent_path[256];
+            strncpy(parent_path, path, sizeof(parent_path) - 1);
+            parent_path[sizeof(parent_path) - 1] = '\0';
+            char *last_slash = strrchr(parent_path, '/');
+            if (last_slash) {
+                *last_slash = '\0'; // Truncate the string to the parent directory
+            }
+            if (strcmp(parent_path, "") == 0) {
+                strcpy(parent_path, "/");
+            }
+            
+            char go_up_html[512];
+            snprintf(go_up_html, sizeof(go_up_html),
+                     "<div class='file-item'>"
+                     "<a href='/dashboard?path=%s'>Go Back</a>"
+                     "</div>", parent_path);
+            strcat(file_list_html, go_up_html);
+        }
+
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
             if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
-                // ADDED DEBUGGING PRINT STATEMENT HERE
-                printf("Generating link for file: %s\n", ent->d_name);
-                fflush(stdout);
-
                 char temp_html[1664];
-                snprintf(temp_html, sizeof(temp_html),
-         "<div class='file-item'>"
-         "<span class='file-name'>%s</span>"
-         "<div class='file-actions'>"
-         "<a href='/view_file?file=%s' class='view-btn'>View</a>"
-         "<a href='/download_file?file=%s' class='download-btn'>Download</a>"
-         "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
-         "<input type='hidden' name='filename' value='%s'>"
-         "<button type='submit'>Delete</button>"
-         "</form>"
-         "</div>"
-         "</div>", ent->d_name, ent->d_name, ent->d_name, ent->d_name);
+                
+                // Check if the entry is a directory
+                if (ent->d_type == DT_DIR) {
+                    char new_path[512];
+                    snprintf(new_path, sizeof(new_path), "%s%s/", path, ent->d_name);
+                    snprintf(temp_html, sizeof(temp_html),
+                             "<div class='file-item'>"
+                             "<span class='file-icon folder-icon'>&#128193;</span>"
+                             "<a href='/dashboard?path=%s' class='file-name'>%s/</a>"
+                             "<div class='file-actions'>"
+                             "<form action='/delete_folder' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this folder?\");'>"
+                             "<input type='hidden' name='foldername' value='%s'>"
+                             "<input type='hidden' name='path' value='%s'>"
+                             "<button type='submit' class='delete-btn'>Delete</button>"
+                             "</form>"
+                             "</div>"
+                             "</div>", new_path, ent->d_name, ent->d_name, path);
+                } else { // It's a regular file
+                    snprintf(temp_html, sizeof(temp_html),
+                             "<div class='file-item'>"
+                             "<span class='file-icon file-icon'>&#128196;</span>"
+                             "<span class='file-name'>%s</span>"
+                             "<div class='file-actions'>"
+                             "<a href='/view_file?file=%s%s' class='view-btn'>View</a>"
+                             "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
+                             "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
+                             "<input type='hidden' name='filename' value='%s'>"
+                             "<input type='hidden' name='path' value='%s'>"
+                             "<button type='submit' class='delete-btn'>Delete</button>"
+                             "</form>"
+                             "</div>"
+                             "</div>", ent->d_name, path, ent->d_name, path, ent->d_name, ent->d_name, path);
+                }
                 strcat(file_list_html, temp_html);
             }
         }
         closedir(dir);
     } else {
-        strcat(file_list_html, "<p>No files uploaded yet.</p>");
+        strcat(file_list_html, "<p>No files or folders in this directory.</p>");
     }
 
     snprintf(body, sizeof(body),
@@ -249,34 +374,22 @@ void http_send_dashboard(int client_socket, const char *username) {
              "        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 0; }"
              "        .container { max-width: 800px; margin: 40px auto; padding: 20px; background-color: #fff; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }"
              "        h1 { color: #1a73e8; }"
+             "        h2 { border-bottom: 1px solid #eee; padding-bottom: 5px; }"
              "        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }"
-             "        .file-list { border-top: 1px solid #eee; padding-top: 20px; }"
+             "        .file-list { border-top: 1px solid #eee; padding-top: 20px; background_color:green;}"
              "        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #eee; }"
-             "        .file-name { font-weight: bold; flex-grow: 1; }"
-             "        .file-actions button { padding: 5px 10px; margin-left: 10px; border: none; border-radius: 4px; cursor: pointer; color: #fff; }"
-             "        .file-actions button[type='submit'] { background-color: #4CAF50; }"
-             "        .file-actions button:last-child { background-color: #f44336; }"
-             "        .upload-form { margin-top: 20px; padding: 20px; background-color: #f9f9f9; border-radius: 8px; }"
-             "        input[type='file'] { margin-bottom: 10px; }"
+             "        .file-name { font-weight: bold; flex-grow: 1; text-decoration: none; color: #333; }"
+             "        .file-icon { font-size: 24px; margin-right: 10px; }"
+             "        .file-actions a, .file-actions button { padding: 5px 10px; margin-left: 10px; border: none; border-radius: 4px; cursor: pointer; color: #fff; text-decoration: none; }"
+             "        .view-btn, .download-btn { background-color: #4CAF50; }"
+             "        .download-btn { background-color: #1a73e8; }"
+             "        .delete-btn { background-color: #f44336; }"
+             "        .upload-form, .create-folder-form { margin-top: 20px; padding: 20px; background-color: #f9f9f9; border-radius: 8px; }"
+             "        input[type='file'], input[type='text'] { margin-bottom: 10px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: calc(400px - 100px); }"
              "        .form-actions { text-align: right; }"
              "        .form-actions button { background-color: #1a73e8; color: #fff; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; }"
              "        .logout-form { display: inline-block; }"
              "        .logout-form button { background-color: #f44336; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; }"
-             "        .view-btn, .download-btn {"
-"            display: inline-block;"
-"            padding: 5px 10px;"
-"            margin-left: 10px;"
-"            border: none;"
-"            border-radius: 4px;"
-"            cursor: pointer;"
-"            color: #fff;"
-"            text-decoration: none;"
-"            text-align: center;"
-"            line-height: 1.5;" 
-"        }"
-"        .view-btn { background-color: #4CAF50; }"
-"        .download-btn { background-color: #1a73e8; }"
-"        .delete-btn { background-color: #f44336; }"
              "    </style>"
              "</head>"
              "<body>"
@@ -287,23 +400,35 @@ void http_send_dashboard(int client_socket, const char *username) {
              "                <button type='submit'>Logout</button>"
              "            </form>"
              "        </div>"
-             "        <h2>Your Files</h2>"
+             "        <h2>Current Path: %s</h2>"
              "        <div class='file-list'>%s</div>"
              "        <div class='upload-form'>"
              "            <h2>Upload a New File</h2>"
              "            <form action='/upload' method='post' enctype='multipart/form-data'>"
+             "                <input type='hidden' name='path' value='%s'>"
              "                <input type='file' name='file' required>"
              "                <div class='form-actions'>"
              "                    <button type='submit'>Upload File</button>"
              "                </div>"
              "            </form>"
              "        </div>"
+             "        <div class='create-folder-form'>"
+             "            <h2>Create New Folder</h2>"
+             "            <form action='/create_folder' method='post'>"
+             "                <input type='hidden' name='path' value='%s'>"
+             "                <input type='text' name='foldername' placeholder='Folder Name' required>"
+             "                <button type='submit'>Create Folder</button>"
+             "            </form>"
+             "        </div>"
              "    </div>"
              "</body>"
-             "</html>", username, file_list_html);
+             "</html>", username, path, file_list_html, path, path);
 
     http_send_response(client_socket, 200, "text/html", body, strlen(body));
 }
+
+
+
 
 /**
  * @brief Sends the login page to the client.
@@ -417,14 +542,91 @@ void http_send_welcome_page(int client_socket) {
     http_send_response(client_socket, 200, "text/html", body, strlen(body));
 }
 
+// New helper function to create a directory and its parents
+int create_full_path(const char *path, mode_t mode) {
+    char *pp;
+    char *sp;
+    int status;
+    char *copypath = strdup(path);
+
+    status = 0;
+    pp = copypath;
+    while (status == 0 && (sp = strchr(pp, '/')) != 0) {
+        if (sp != pp) {
+            *sp = '\0';
+            if (mkdir(copypath, mode) != 0) {
+                if (errno != EEXIST) {
+                    status = -1;
+                }
+            }
+            *sp = '/';
+        }
+        pp = sp + 1;
+    }
+    if (status == 0) {
+        if (mkdir(path, mode) != 0) {
+            if (errno != EEXIST) {
+                status = -1;
+            }
+        }
+    }
+    free(copypath);
+    return status;
+}
+
+
+
 /**
- * @brief Handles a multipart/form-data file upload request.
+ * @brief Handles a POST request to create a new folder.
  * @param request The full HTTP request string.
  * @param username The username of the session.
  * @return true on success, false on failure.
  */
-bool http_handle_upload(const char *request, const char *username) {
-    // Find boundary string
+bool handle_create_folder(const char *request, const char *username) {
+    char foldername[256];
+    char path[256] = "/";
+    
+    const char *body = strstr(request, "\r\n\r\n") + 4;
+    
+    if (get_post_param(body, "foldername", foldername, sizeof(foldername)) == 0) {
+        fprintf(stderr, "Error: 'foldername' not found in POST data.\n");
+        return false;
+    }
+    get_post_param(body, "path", path, sizeof(path));
+    
+    char decoded_path[256];
+    urldecode(decoded_path, path);
+
+    char full_path[640];
+      // Check if the current path is the root directory
+    // if (strcmp(path, "/") == 0) {
+    //     snprintf(full_path, sizeof(full_path), "user_files/%s/%s", username, foldername);
+    // } else {
+    //     // Concatenate with a forward slash for nested folders
+    //     snprintf(full_path, sizeof(full_path), "user_files/%s%s/%s", username, path, foldername);
+    // }
+    snprintf(full_path, sizeof(full_path), "user_files/%s%s%s", username, decoded_path, foldername);
+
+    // Use the new helper function instead of direct mkdir()
+    if (create_full_path(full_path, 0777) != 0) {
+        perror("Failed to create folder");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * @brief Handles a multipart/form-data file upload request.
+ * @param client_socket The client socket.
+ * @param request The full HTTP request headers.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+// http_handler.c - Corrected http_handle_upload function
+
+bool http_handle_upload(int client_socket, const char *request, const char *username) {
+    // Correctly find boundary
     const char *boundary_start = strstr(request, "boundary=");
     if (!boundary_start) return false;
     boundary_start += strlen("boundary=");
@@ -435,7 +637,7 @@ bool http_handle_upload(const char *request, const char *username) {
     char boundary[boundary_len + 3];
     snprintf(boundary, sizeof(boundary), "--%.*s", (int)boundary_len, boundary_start);
     
-    // Find filename
+    // Correctly find filename
     const char *filename_start = strstr(request, "filename=\"");
     if (!filename_start) return false;
     filename_start += strlen("filename=\"");
@@ -449,36 +651,103 @@ bool http_handle_upload(const char *request, const char *username) {
     }
     strncpy(filename, filename_start, filename_len);
     filename[filename_len] = '\0';
+
+    // Find the current path from the form data
+    char path[256] = "/";
+    const char *path_param = strstr(request, "name=\"path\"");
+    if (path_param) {
+        path_param = strstr(path_param, "\r\n\r\n") + 4;
+        const char *path_end = strstr(path_param, boundary);
+        if (path_end) {
+            size_t path_len = path_end - path_param - 2; // -2 for \r\n;
+            if (path_len > 0 && path_len < sizeof(path)) {
+                strncpy(path, path_param, path_len);
+                path[path_len] = '\0';
+            }
+        }
+    }
     
-    // Find the body start
-    const char *body_start = strstr(filename_end, "\r\n\r\n");
-    if (!body_start) return false;
-    body_start += 4;
-    
-    // Find body end
-    char end_boundary[boundary_len + 5];
-    snprintf(end_boundary, sizeof(end_boundary), "\r\n%s--", boundary);
-    const char *body_end = strstr(body_start, end_boundary);
-    if (!body_end) return false;
-    size_t content_len = body_end - body_start;
-    
-    // Ensure the user directory exists
-    char user_path[256];
-    snprintf(user_path, sizeof(user_path), "user_files/%s", username);
-    mkdir(user_path, 0777);
-    
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), "%s/%s", user_path, filename);
-    
+    // Now decode the path correctly
+    char decoded_path[256];
+    urldecode(decoded_path, path);
+
+    // Find the start of the file content.
+    // The body starts after the headers, but the file content starts after its own form part.
+    // We need to find the `\r\n\r\n` that separates the file part headers from its content.
+    const char *file_body_start = strstr(filename_end, "\r\n\r\n");
+    if (!file_body_start) return false;
+    file_body_start += 4; // Move past the `\r\n\r\n`
+
+    // Build the full path for the new file
+    char file_directory[512];
+    snprintf(file_directory, sizeof(file_directory), "user_files/%s%s", username, decoded_path);
+    if (create_full_path(file_directory, 0777) != 0) {
+        perror("Failed to create parent directory for upload");     
+        return false;
+    }
+
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s%s", file_directory, filename); // Correct path construction
+
     FILE *file = fopen(filepath, "wb");
     if (!file) {
         perror("Failed to open file for writing");
         return false;
     }
+
+    // Write the initial part of the file content that was read with the headers
+    // size_t initial_bytes = strlen(request) - (file_body_start - request);
+    // fwrite(file_body_start, 1, initial_bytes, file);
+
+    // // Read the rest of the data from the socket until the boundary is found.
+    // char read_buffer[BUFFER_SIZE];
+    // long total_read = initial_bytes;
+    // int bytes_received;
     
-    fwrite(body_start, 1, content_len, file);
+    // while(1){
+    //     bytes_received = recv(client_socket, read_buffer, BUFFER_SIZE, 0);
+    //     if (bytes_received <= 0) {
+    //         perror("Error during file upload");
+    //         fclose(file);
+    //         return false;
+    //     }
+
+    //     // Check for the end boundary marker
+    //     char end_boundary_marker[boundary_len + 5];
+    //     snprintf(end_boundary_marker, sizeof(end_boundary_marker), "\r\n--%.*s--", (int)boundary_len, boundary_start);
+        
+    //     char *boundary_in_buffer = strstr(read_buffer, end_boundary_marker);
+
+    //     if (boundary_in_buffer) {
+    //         size_t bytes_to_write = boundary_in_buffer - read_buffer;
+    //         fwrite(read_buffer, 1, bytes_to_write, file);
+    //         break;
+    //     } else {
+    //         fwrite(read_buffer, 1, bytes_received, file);
+    //     }
+    // }
+    size_t initial_bytes = strlen(request) - (file_body_start - request);
+fwrite(file_body_start, 1, initial_bytes, file);
+
+// Read the rest of the file directly from the socket in chunks and write to disk
+char read_buffer[BUFFER_SIZE];
+int bytes_received;
+
+while ((bytes_received = recv(client_socket, read_buffer, BUFFER_SIZE, 0)) > 0) {
+    char end_boundary_marker[boundary_len + 5];
+    snprintf(end_boundary_marker, sizeof(end_boundary_marker), "\r\n--%.*s--", (int)boundary_len, boundary_start);
+    char *boundary_in_buffer = strstr(read_buffer, end_boundary_marker);
+
+    if (boundary_in_buffer) {
+        size_t bytes_to_write = boundary_in_buffer - read_buffer;
+        fwrite(read_buffer, 1, bytes_to_write, file);
+        break; // End of file data
+    } else {
+        fwrite(read_buffer, 1, bytes_received, file);
+    }
+}
+
     fclose(file);
-    
     return true;
 }
 
@@ -490,14 +759,22 @@ bool http_handle_upload(const char *request, const char *username) {
  */
 bool http_handle_delete_file(const char *request, const char *username) {
     char filename[256];
+    char path[256] = "/";
     const char *body = strstr(request, "\r\n\r\n") + 4;
     
-    if (get_post_param(body, "filename", filename, sizeof(filename))) {
-        char filepath[512];
-        snprintf(filepath, sizeof(filepath), "user_files/%s/%s", username, filename);
+    // Get filename and path from POST body
+    if (get_post_param(body, "filename", filename, sizeof(filename)) &&
+        get_post_param(body, "path", path, sizeof(path))) {
+        
+        // Ensure path is properly decoded before use
+        char decoded_path[256];
+        urldecode(decoded_path, path);
+
+        char filepath[640];
+        // Correctly join the base user directory, the decoded path, and the filename.
+        snprintf(filepath, sizeof(filepath), "user_files/%s%s%s", username, decoded_path, filename);
         
         printf("Attempting to delete file: %s\n", filepath);
-        fflush(stdout);
         
         if (remove(filepath) == 0) {
             printf("Successfully deleted file.\n");
@@ -509,6 +786,43 @@ bool http_handle_delete_file(const char *request, const char *username) {
     return false;
 }
 
+
+
+/**
+ * @brief Handles a POST request to delete a folder.
+ * @param request The full HTTP request string.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+bool http_handle_delete_folder(const char *request,const char *username){
+    
+    char foldername[256];
+    char path[256] = "/";
+    const char *body = strstr(request, "\r\n\r\n") + 4;
+
+    if (get_post_param(body, "foldername", foldername, sizeof(foldername)) && 
+    get_post_param(body, "path", path, sizeof(path))) {
+
+    // URL-decode the path parameter
+    char decoded_path[256];
+    urldecode(decoded_path, path);
+    char folderpath[640];
+    // Correct the typo: "users_files" -> "user_files"
+    snprintf(folderpath, sizeof(folderpath), "user_files/%s%s%s", username, decoded_path, foldername);
+    
+
+    if (rmdir(folderpath) == 0) {
+            printf("Folder deleted successfully: %s \n", folderpath);
+            fflush(stdout);
+            return true;
+        } else {
+            perror("Failed to delete Folder");
+        }
+   }
+   return false; 
+}
+
+
 /**
  * @brief Handles a GET request to view a file.
  * @param client_socket The client socket.
@@ -518,8 +832,6 @@ bool http_handle_delete_file(const char *request, const char *username) {
 void http_handle_view_file(int client_socket, const char *url, const char *username) {
     char filename[256];
     const char *file_param = strstr(url, "file=");
-    printf("file name in view: %s \n",file_param);
-     fflush(stdout);
     if (!file_param) {
         http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
         return;
@@ -528,7 +840,7 @@ void http_handle_view_file(int client_socket, const char *url, const char *usern
     urldecode(filename, file_param);
     
     char filepath[512];
-    snprintf(filepath, sizeof(filepath), "user_files/%s/%s", username, filename);
+    snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
     
     FILE *file = fopen(filepath, "rb");
     if (!file) {
@@ -579,7 +891,6 @@ void http_handle_view_file(int client_socket, const char *url, const char *usern
     http_send_response(client_socket, 200, "text/html", response_body, strlen(response_body));
     free(file_content);
 }
-
 /**
  * @brief Handles a GET request to download a file.
  * @param client_socket The client socket.
@@ -597,7 +908,7 @@ void http_send_file_for_download(int client_socket, const char *url, const char 
     urldecode(filename, file_param);
     
     char filepath[512];
-    snprintf(filepath, sizeof(filepath), "files/%s/%s", username, filename);
+    snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
     
     FILE *file = fopen(filepath, "rb");
     if (!file) {
@@ -672,3 +983,69 @@ int get_post_param(const char *body, const char *param_name, char *output, size_
     output[len] = '\0';
     return 1;
 }
+
+/**
+ * @brief Handles a multipart/form-data file upload request.
+ * @param request The full HTTP request string.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+// bool http_handle_upload(const char *request, const char *username) {
+//     // Find boundary string
+//     const char *boundary_start = strstr(request, "boundary=");
+//     if (!boundary_start) return false;
+//     boundary_start += strlen("boundary=");
+//     const char *boundary_end = strstr(boundary_start, "\r\n");
+//     if (!boundary_end) return false;
+//     size_t boundary_len = boundary_end - boundary_start;
+    
+//     char boundary[boundary_len + 3];
+//     snprintf(boundary, sizeof(boundary), "--%.*s", (int)boundary_len, boundary_start);
+    
+//     // Find filename
+//     const char *filename_start = strstr(request, "filename=\"");
+//     if (!filename_start) return false;
+//     filename_start += strlen("filename=\"");
+//     const char *filename_end = strchr(filename_start, '"');
+//     if (!filename_end) return false;
+//     size_t filename_len = filename_end - filename_start;
+    
+//     char filename[256];
+//     if (filename_len >= sizeof(filename)) {
+//         return false;
+//     }
+//     strncpy(filename, filename_start, filename_len);
+//     filename[filename_len] = '\0';
+    
+//     // Find the body start
+//     const char *body_start = strstr(filename_end, "\r\n\r\n");
+//     if (!body_start) return false;
+//     body_start += 4;
+    
+//     // Find body end
+//     char end_boundary[boundary_len + 5];
+//     snprintf(end_boundary, sizeof(end_boundary), "\r\n%s--", boundary);
+//     const char *body_end = strstr(body_start, end_boundary);
+//     if (!body_end) return false;
+//     size_t content_len = body_end - body_start;
+    
+//     // Ensure the user directory exists
+//     char user_path[256];
+//     snprintf(user_path, sizeof(user_path), "user_files/%s", username);
+//     mkdir(user_path, 0777);
+    
+//     char filepath[512];
+//     snprintf(filepath, sizeof(filepath), "%s/%s", user_path, filename);
+    
+//     FILE *file = fopen(filepath, "wb");
+//     if (!file) {
+//         perror("Failed to open file for writing");
+//         return false;
+//     }
+    
+//     fwrite(body_start, 1, content_len, file);
+//     fclose(file);
+    
+//     return true;
+// }
+
