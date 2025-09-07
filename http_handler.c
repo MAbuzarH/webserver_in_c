@@ -341,20 +341,78 @@ void http_send_dashboard(int client_socket, const char *username, const char *pa
                              "</div>"
                              "</div>", new_path, ent->d_name, ent->d_name, path);
                 } else { // It's a regular file
-                    snprintf(temp_html, sizeof(temp_html),
-                             "<div class='file-item'>"
-                             "<span class='file-icon file-icon'>&#128196;</span>"
-                             "<span class='file-name'>%s</span>"
-                             "<div class='file-actions'>"
-                             "<a href='/view_file?file=%s%s' class='view-btn'>View</a>"
-                             "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
-                             "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
-                             "<input type='hidden' name='filename' value='%s'>"
-                             "<input type='hidden' name='path' value='%s'>"
-                             "<button type='submit' class='delete-btn'>Delete</button>"
-                             "</form>"
-                             "</div>"
-                             "</div>", ent->d_name, path, ent->d_name, path, ent->d_name, ent->d_name, path);
+//  const char *file_name = ent->d_name;
+// const char *php_ext = strstr(file_name, ".php");
+// if (php_ext && *(php_ext + 4) == '\0') {
+//     // It's a PHP file, generate a direct link
+//     snprintf(temp_html, sizeof(temp_html),
+//              "<div class='file-item'>"
+//              "<span class='file-icon file-icon'>&#128196;</span>"
+//              "<span class='file-name'>%s</span>"
+//              "<div class='file-actions'>"
+//              "<a href='%s%s' class='view-btn'>View</a>"
+//              "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
+//              "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
+//              "<input type='hidden' name='filename' value='%s'>"
+//              "<input type='hidden' name='path' value='%s'>"
+//              "<button type='submit' class='delete-btn'>Delete</button>"
+//              "</form>"
+//              "</div>"
+//              "</div>", ent->d_name, path, ent->d_name, path, ent->d_name, ent->d_name, path);
+// } else {
+//     // It's a static file, use the /view_file handler
+//     snprintf(temp_html, sizeof(temp_html),
+//              "<div class='file-item'>"
+//              "<span class='file-icon file-icon'>&#128196;</span>"
+//              "<span class='file-name'>%s</span>"
+//              "<div class='file-actions'>"
+//              "<a href='/view_file?file=%s%s' class='view-btn'>View</a>"
+//              "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
+//              "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
+//              "<input type='hidden' name='filename' value='%s'>"
+//              "<input type='hidden' name='path' value='%s'>"
+//              "<button type='submit' class='delete-btn'>Delete</button>"
+//              "</form>"
+//              "</div>"
+//              "</div>", ent->d_name, path, ent->d_name, path, ent->d_name, ent->d_name, path);
+// }
+const char *file_name = ent->d_name;
+const char *php_ext = strstr(file_name, ".php");
+if (php_ext && *(php_ext + 4) == '\0') {
+    // It's a PHP file, generate a direct link.
+    snprintf(temp_html, sizeof(temp_html),
+             "<div class='file-item'>"
+             "<span class='file-icon file-icon'>&#128196;</span>"
+             "<span class='file-name'>%s</span>"
+             "<div class='file-actions'>"
+             // CORRECTED: 'path' already includes 'user_files/username/'
+             "<a href ='/user_files/%s/%s' class='view-btn'>View</a>"
+             "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
+             "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
+             "<input type='hidden' name='filename' value='%s'>"
+             "<input type='hidden' name='path' value='%s'>"
+             "<button type='submit' class='delete-btn'>Delete</button>"
+             "</form>"
+             "</div>"
+             "</div>", ent->d_name, username, file_name, username, file_name, file_name, username);
+} else {
+    // It's a static file, use the /view_file handler with the existing logic.
+    snprintf(temp_html, sizeof(temp_html),
+             "<div class='file-item'>"
+             "<span class='file-icon file-icon'>&#128196;</span>"
+             "<span class='file-name'>%s</span>"
+             "<div class='file-actions'>"
+             "<a href='/view_file?file=%s%s' class='view-btn'>View</a>"
+             "<a href='/download_file?file=%s%s' class='download-btn'>Download</a>"
+             "<form action='/delete_file' method='post' style='display:inline;' onsubmit='return confirm(\"Are you sure you want to delete this file?\");'>"
+             "<input type='hidden' name='filename' value='%s'>"
+             "<input type='hidden' name='path' value='%s'>"
+             "<button type='submit' class='delete-btn'>Delete</button>"
+             "</form>"
+             "</div>"
+             "</div>", ent->d_name, path, ent->d_name, path, ent->d_name, ent->d_name, path);
+}
+
                 }
                 strcat(file_list_html, temp_html);
             }
@@ -574,7 +632,27 @@ int create_full_path(const char *path, mode_t mode) {
     return status;
 }
 
-
+void normalize_path(char *result, const char *base_path, const char *new_folder){
+if(strcmp(new_folder,"..") == 0){
+    //go up one directory 
+    char *last_slash = strrchr(base_path,'/');
+    if(last_slash && last_slash != base_path){
+     strncpy(result,base_path, last_slash - base_path);
+     result[last_slash - base_path] = '\0';
+    }else{
+        // If it's the root, stay at the root.
+        strcpy(result, "/");
+    }
+}else{
+    if(strcmp(base_path,"/")){
+       // If the base is root, don't add an extra slash.
+       snprintf(result,512,"/%s",new_folder);
+    }else{
+      // If the base is root, don't add an extra slash.
+       snprintf(result,512,"%s/%s",base_path,new_folder);
+    }
+}
+}
 
 /**
  * @brief Handles a POST request to create a new folder.
@@ -598,6 +676,8 @@ bool handle_create_folder(const char *request, const char *username) {
     urldecode(decoded_path, path);
 
     char full_path[640];
+     //normalize_path(full_path,path,foldername);
+
       // Check if the current path is the root directory
     // if (strcmp(path, "/") == 0) {
     //     snprintf(full_path, sizeof(full_path), "user_files/%s/%s", username, foldername);
@@ -822,75 +902,141 @@ bool http_handle_delete_folder(const char *request,const char *username){
    return false; 
 }
 
-
+// A helper function to check for specific file extensions.
+bool has_file_extension(const char *url, const char *ext) {
+    const char *dot = strrchr(url, '.');
+    if (!dot || dot == url) return false;
+    return strcmp(dot, ext) == 0;
+}
 /**
  * @brief Handles a GET request to view a file.
  * @param client_socket The client socket.
  * @param url The request URL containing the filename.
  * @param username The username of the session.
  */
+// In http_handler.c
+
 void http_handle_view_file(int client_socket, const char *url, const char *username) {
-    char filename[256];
+    char decoded_path[256];
     const char *file_param = strstr(url, "file=");
     if (!file_param) {
-        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
+        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing 'file' parameter", 37);
         return;
     }
-    file_param += strlen("file=");
-    urldecode(filename, file_param);
-    
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
-    
-    FILE *file = fopen(filepath, "rb");
+    urldecode(decoded_path, file_param + 5);
+
+   //new logic
+    if (has_file_extension(url, ".php")) {
+        // Block all attempts to view PHP source code
+        http_send_response(client_socket, 403, "text/plain", "Forbidden", 9);
+        return;
+    }
+
+    char file_path[512];
+    snprintf(file_path, sizeof(file_path), "user_files/%s%s", username, decoded_path);
+
+    FILE *file = fopen(file_path, "r");
     if (!file) {
-        http_send_response(client_socket, 404, "text/plain", "File Not Found", 14);
+        http_send_response(client_socket, 404, "text/plain", "File not found.", 15);
         return;
     }
-    
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    char *file_content = malloc(file_size);
-    if (!file_content) {
-        fclose(file);
-        http_send_response(client_socket, 500, "text/plain", "Internal Server Error", 21);
-        return;
+
+    // Determine the content type based on the file extension
+    char *content_type = "text/plain"; // Default
+    if (strstr(file_path, ".html")) {
+        content_type = "text/html";
+    } else if (strstr(file_path, ".css")) {
+        content_type = "text/css";
+    } else if (strstr(file_path, ".js")) {
+        content_type = "application/javascript";
+    } else if (strstr(file_path, ".jpg") || strstr(file_path, ".jpeg")) {
+        content_type = "image/jpeg";
+    } else if (strstr(file_path, ".png")) {
+        content_type = "image/png";
     }
-    
-    fread(file_content, 1, file_size, file);
+    // Add more file types as needed...
+
+    // Send HTTP headers
+    char header[512];
+    snprintf(header, sizeof(header),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: %s\r\n"
+             "\r\n",
+             content_type);
+    write(client_socket, header, strlen(header));
+
+    // Send the file content
+    char buffer[1024];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        write(client_socket, buffer, bytes_read);
+    }
+
     fclose(file);
-    
-    char response_body[file_size + 1024];
-    snprintf(response_body, sizeof(response_body),
-             "<!DOCTYPE html>"
-             "<html lang='en'>"
-             "<head>"
-             "    <meta charset='UTF-8'>"
-             "    <title>View File: %s</title>"
-             "    <style>"
-             "        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }"
-             "        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }"
-             "        pre { background-color: #f9f9f9; padding: 15px; border-radius: 4px; overflow: auto; white-space: pre-wrap; word-wrap: break-word; }"
-             "        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }"
-             "        .back-btn { padding: 8px 16px; background-color: #1a73e8; color: #fff; text-decoration: none; border-radius: 4px; }"
-             "    </style>"
-             "</head>"
-             "<body>"
-             "    <div class='container'>"
-             "        <div class='header'>"
-             "            <h1>Viewing File: %s</h1>"
-             "            <a href='/dashboard' class='back-btn'>Back to Dashboard</a>"
-             "        </div>"
-             "        <pre>%s</pre>"
-             "    </div>"
-             "</body>"
-             "</html>", filename, filename, file_content);
-             
-    http_send_response(client_socket, 200, "text/html", response_body, strlen(response_body));
-    free(file_content);
 }
+
+// void http_handle_view_file(int client_socket, const char *url, const char *username) {
+//     char filename[256];
+//     const char *file_param = strstr(url, "file=");
+//     if (!file_param) {
+//         http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
+//         return;
+//     }
+//     file_param += strlen("file=");
+//     urldecode(filename, file_param);
+    
+//     char filepath[512];
+//     snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
+    
+//     FILE *file = fopen(filepath, "rb");
+//     if (!file) {
+//         http_send_response(client_socket, 404, "text/plain", "File Not Found", 14);
+//         return;
+//     }
+    
+//     fseek(file, 0, SEEK_END);
+//     long file_size = ftell(file);
+//     fseek(file, 0, SEEK_SET);
+    
+//     char *file_content = malloc(file_size);
+//     if (!file_content) {
+//         fclose(file);
+//         http_send_response(client_socket, 500, "text/plain", "Internal Server Error", 21);
+//         return;
+//     }
+    
+//     fread(file_content, 1, file_size, file);
+//     fclose(file);
+    
+//     char response_body[file_size + 1024];
+//     snprintf(response_body, sizeof(response_body),
+//              "<!DOCTYPE html>"
+//              "<html lang='en'>"
+//              "<head>"
+//              "    <meta charset='UTF-8'>"
+//              "    <title>View File: %s</title>"
+//              "    <style>"
+//              "        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }"
+//              "        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }"
+//              "        pre { background-color: #f9f9f9; padding: 15px; border-radius: 4px; overflow: auto; white-space: pre-wrap; word-wrap: break-word; }"
+//              "        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }"
+//              "        .back-btn { padding: 8px 16px; background-color: #1a73e8; color: #fff; text-decoration: none; border-radius: 4px; }"
+//              "    </style>"
+//              "</head>"
+//              "<body>"
+//              "    <div class='container'>"
+//              "        <div class='header'>"
+//              "            <h1>Viewing File: %s</h1>"
+//              "            <a href='/dashboard' class='back-btn'>Back to Dashboard</a>"
+//              "        </div>"
+//              "        <pre>%s</pre>"
+//              "    </div>"
+//              "</body>"
+//              "</html>", filename, filename, file_content);
+             
+//     http_send_response(client_socket, 200, "text/html", response_body, strlen(response_body));
+//     free(file_content);
+// }
 /**
  * @brief Handles a GET request to download a file.
  * @param client_socket The client socket.

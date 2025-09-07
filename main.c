@@ -14,6 +14,7 @@
 #include <dirent.h>
 
 #include "http_handler.h"
+#include "php_handler.h"
 #include "session.h"
 #include "auth.h"
 
@@ -22,6 +23,7 @@
 
 // Global error message buffer
 char error_msg[256];
+
 
 /**
  * @brief Checks if a request URL matches a specific path.
@@ -82,7 +84,8 @@ void *handle_client(void *arg) {
     // Log the received request for debugging purposes.
     printf("Received request: Method=%s, URL=%s\n", req->method, req->url);
 
-    // --- NEW FOLDER MANAGEMENT ROUTING ---
+  
+
 
     // Route a POST request to create a new folder.
     if (strcmp(req->url, "/create_folder") == 0 && strcmp(req->method, "POST") == 0) {
@@ -90,30 +93,31 @@ void *handle_client(void *arg) {
             http_send_redirect(c, "/login");
         } else {
             // Call the handler to create the folder based on the POST data.
+            char path[256] = "/";
+            char foldername[256];
+            const char *body = strstr(request, "\r\n\r\n") + 4;
+          //if(  get_post_param(body, "path", path, sizeof(path)) &&
+          //  get_post_param(body, "foldername", foldername, sizeof(foldername))){
             if (handle_create_folder(request, session->username)) {
                 // On success, redirect the user back to the current directory.
-                char path[256] = "/";
-               // char *foldername;
-            
-                const char *body = strstr(request, "\r\n\r\n") + 4;
-                get_post_param(body, "path", path, sizeof(path));
-                // get_post_param(body, "foldername", foldername, sizeof(foldername));
-                //char redirect_url[300];
-                //snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s", path);
-        //          if (strcmp(path, "/") == 0) {
-        //        snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s%s", path, foldername);
-        //       } else {
-        // // Concatenate with a forward slash for nested folders
-        //       snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s/%s", path, foldername);
                
-            // }
-            //  http_send_redirect(c, redirect_url);
-               char redirect_url[300];
-                snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s", path);
-                http_send_redirect(c, redirect_url);
+                char redirect_url[640];
+                 // normalize_path(redirect_url, path, foldername); // Use your new function
+                 //http_send_redirect(c, redirect_url);
+                 snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s", path);
+                 http_send_redirect(c, redirect_url);
             } else {
+                // Failure: Redirect back to the original path
+        // char redirect_url[640];
+        // snprintf(redirect_url, sizeof(redirect_url), "/dashboard?path=%s", path);
+        // http_send_redirect(c, redirect_url);
+                // char redirect_url[300];
                 http_send_response(c, 500, "text/plain", "Failed to create folder", 24);
             }
+       // }else{
+          //  printf("handle_client():failed to find %s or %s :Cre_fol \n",path,foldername);
+          //  fflush(stdout);
+       // }
         }
     }
     // Route a POST request to delete a folder.
@@ -186,7 +190,7 @@ void *handle_client(void *arg) {
                 Session *new_session = create_session(username);
                 http_send_redirect_with_cookie(c, "/dashboard?path=/", new_session->session_id);
             } else {
-                http_send_response(c, 401, "text/html", "<h1>Unauthorized</h1><p>Incorrect username or password.</p>", 56);
+                http_send_response(c, 401, "text/html", "<h1>Unauthorized</h1><p>Incorrect username or password.</p>", 60);
             }
         } else {
             http_send_response(c, 400, "text/plain", "Bad Request", 11);
@@ -252,12 +256,40 @@ void *handle_client(void *arg) {
         }
         http_send_redirect(c, "/");
     }
+     //Get request to handel get for php file
+    // else if(has_file_extension(req->url,".php")){
+    //  if(!session){
+    //  http_send_redirect(c, "/login"); 
+    //  }else{
+    //     http_handle_php(c,req,request,session->username);
+    //  }
+    // }
+    else if (strstr(req->url, "/user_files/") == req->url) {
+    // If the URL is a request to a user's file, handle it here.
+    if (!session) {
+        http_send_redirect(c, "/login");
+    } else {
+        if (has_file_extension(req->url, ".php")) {
+            // It's a PHP script, run the PHP handler
+            http_handle_php(c, req, request, session->username);
+        } else {
+            // It's a static file, run the static file handler
+            http_handle_view_file(c, req->url, session->username);
+        }
+    }
+}
     // Route a GET request to view a file.
     else if (strstr(req->url, "/view_file") == req->url && strcmp(req->method, "GET") == 0) {
         if (!session) {
             http_send_redirect(c, "/login");
         } else {
-            http_handle_view_file(c, req->url, session->username);
+            if(has_file_extension(req->url,".php")){
+               http_handle_php(c,req,request,session->username);
+            }else{
+                http_handle_view_file(c, req->url, session->username);
+            }
+                 
+            
         }
     }
     // Route a GET request to download a file.
@@ -268,6 +300,7 @@ void *handle_client(void *arg) {
             http_send_file_for_download(c, req->url, session->username);
         }
     }
+   
     // Handle all other unrecognized requests with a 404 Not Found response.
     else {
         http_send_response(c, 404, "text/plain", "Not Found", 9);
@@ -342,3 +375,13 @@ int main() {
     close(s);
     return EXIT_SUCCESS;
 }
+
+//   if(strcmp(req->url,".php")){
+//         if (!session) {
+//             http_send_redirect(c, "/login");
+//         } else{
+//         printf("routing to php request...\n");
+//         http_handle_php_request(c, req->url,session->username);
+//         }
+       
+//     }

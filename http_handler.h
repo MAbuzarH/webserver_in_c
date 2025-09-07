@@ -20,6 +20,8 @@ typedef struct {
     int size;
 } File;
 
+bool has_file_extension(const char *url, const char *ext);
+
 // /**
 //  * @brief Reads the full HTTP request from the client socket.
 //  * @param c The client socket file descriptor.
@@ -159,5 +161,6 @@ int get_post_param(const char *body, const char *param_name, char *output, size_
 bool handle_create_folder(const char *request,const char *username);
 bool http_handle_upload(int client_socket,const char *request, const char *username);
 int create_full_path(const char *path, mode_t mode);
+void normalize_path(char *result, const char *base_path, const char *new_folder);
 bool http_handle_delete_folder(const char * request,const char *username);
 #endif
