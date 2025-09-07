@@ -38,7 +38,7 @@ Session* create_session(const char *username);
  * @param session_id The ID of the session to find.
  * @return A pointer to the found session, or NULL if not found.
  */
-Session* find_session(const char *session_id);
+//Session* find_session(const char *session_id);
 
 /**
  * @brief Deletes a session by its session ID.
