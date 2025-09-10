@@ -21,7 +21,7 @@ typedef struct {
 } File;
 
 bool has_file_extension(const char *url, const char *ext);
-
+const char *find_header(const char *request, const char *header_name);
 // /**
 //  * @brief Reads the full HTTP request from the client socket.
 //  * @param c The client socket file descriptor.
@@ -159,8 +159,10 @@ void http_handle_view_file(int client_socket, const char *url, const char *usern
 void http_send_file_for_download(int client_socket, const char *url, const char *username);
 int get_post_param(const char *body, const char *param_name, char *output, size_t output_size);
 bool handle_create_folder(const char *request,const char *username);
-bool http_handle_upload(int client_socket,const char *request, const char *username);
+//bool http_handle_upload(int client_socket,const char *request, const char *username);
+bool http_handle_upload(int client_socket,const char *request_headers, const char *username, int content_length);
 int create_full_path(const char *path, mode_t mode);
 void normalize_path(char *result, const char *base_path, const char *new_folder);
+void *memmem(const void *haystack, size_t haystack_len,const void *needle, size_t needle_len);
 bool http_handle_delete_folder(const char * request,const char *username);
 #endif

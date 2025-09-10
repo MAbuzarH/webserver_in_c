@@ -14,6 +14,7 @@
 #include <dirent.h>
 
 #include "http_handler.h"
+#include "thread_safe.h"
 #include "php_handler.h"
 #include "session.h"
 #include "auth.h"
@@ -78,7 +79,8 @@ void *handle_client(void *arg) {
     const char *session_id = get_session_id_from_request(request);
     Session *session = NULL;
     if (session_id) {
-        session = get_session(session_id);
+         session = get_session_ts(session_id);
+        //session = get_session(session_id);
     }
     
     // Log the received request for debugging purposes.
@@ -187,7 +189,7 @@ void *handle_client(void *arg) {
         if (get_post_param(body, "username", username, sizeof(username)) &&
             get_post_param(body, "password", password, sizeof(password))) {
             if (authenticate_user(username, password)) {
-                Session *new_session = create_session(username);
+                Session *new_session = create_session_ts(username);
                 http_send_redirect_with_cookie(c, "/dashboard?path=/", new_session->session_id);
             } else {
                 http_send_response(c, 401, "text/html", "<h1>Unauthorized</h1><p>Incorrect username or password.</p>", 60);
@@ -219,8 +221,14 @@ void *handle_client(void *arg) {
     else if (strcmp(req->url, "/upload") == 0 && strcmp(req->method, "POST") == 0) {
         if (!session) {
             http_send_redirect(c, "/login");
-        } else {
-            if (http_handle_upload(c, request, session->username)) {
+     } else {
+const char *content_length_str = find_header(request, "Content-Length:");
+int content_length = 0;
+if (content_length_str) {
+    content_length = atoi(content_length_str);
+    printf("Content-Length: %d\n", content_length);
+}
+            if (http_handle_upload(c, request, session->username, content_length)) {
                 char path[256] = "/";
                 const char *body = strstr(request, "\r\n\r\n") + 4;
                 get_post_param(body, "path", path, sizeof(path));
@@ -252,7 +260,7 @@ void *handle_client(void *arg) {
     // Route a POST request for logout.
     else if (strcmp(req->url, "/logout") == 0 && strcmp(req->method, "POST") == 0) {
         if (session) {
-            delete_session(session->session_id);
+            delete_session_ts(session->session_id);
         }
         http_send_redirect(c, "/");
     }
@@ -348,6 +356,9 @@ int main() {
 
     printf("Server listening on port %d...\n", PORT);
     fflush(stdout);
+
+
+    //test_php_fpm_connection();
 
     while (1) {
         int *client_sock = malloc(sizeof(int));
