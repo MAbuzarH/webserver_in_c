@@ -49,10 +49,10 @@ void handle_client(int c) {
         printf("Invalid client socket.\n");
         return;
     } 
-   size_t request_length = 0;
+   size_t *request_length = 0;
     // char *request = read_full_request(c,&request_length);
     // char *request = read_full_request(c,&request_length);
-    char *request = read_full_request(c);
+    char *request = read_full_request(c,request_length);
     if (!request) {
         printf("Failed to read request.\n");
         close(c);

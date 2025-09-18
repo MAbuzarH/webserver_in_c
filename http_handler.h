@@ -18,6 +18,9 @@
 
 #define MAX_BOUNDARY_LENGTH 128
 #define MAX_HEADER_LENGTH 1024
+#define MAX_BOUNDARY_LEN 256
+#define MAX_FILENAME_LEN 512
+#define MAX_PATH_LEN 1024
 // #define BUFFER_SIZE 8192
 // #define UPLOAD_DIR "uploads"
 
@@ -57,15 +60,38 @@ typedef struct {
     int size;
 } File;
 
+typedef struct {
+    char filename[MAX_FILENAME_LEN];
+    char content_type[256];
+    char *data;
+    size_t data_length;
+    int is_binary;
+} uploaded_file_t;
+
+// Structure to hold parsed HTTP request parts
+typedef struct {
+    char *headers;
+    char *body;
+    size_t body_length;
+    size_t headers_length;
+} http_request_parts_t;
+
 bool has_file_extension(const char *url, const char *ext);
 const char *find_header(const char *request, const char *header_name);
 
 const char* find_boundary(const char *haystack, size_t haystack_len,
                           const char *needle, size_t needle_len);
-size_t trim_trailing_crlf(const char *data_start,const char *data_end);          
-
-//char* read_full_request(int client_socket, size_t *total_size_out);
-char* read_full_request(int c);
+         
+http_request_parts_t* parse_http_request(const char *full_request);
+void free_http_request_parts(http_request_parts_t *parts);
+const char* find_header_value(const char *headers, const char *header_name);
+char* extract_boundary(const char *content_type) ;
+int is_binary_file(const char *filename);
+char* parse_filename(const char *disposition);
+int handle_file_upload(const char *full_request, const char *username);
+char* read_full_request(int c, size_t *request_size);
+static char* reallocate_buffer(char* buffer, size_t old_size, size_t new_size);
+//char* read_full_request(int c);
 httpreq *parse_http(const char *request);
 void http_send_response(int client_socket, int status_code, const char *content_type, const char *body, size_t body_len);
 

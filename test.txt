@@ -1,15 +1,331 @@
-when we upload code file every thing work. but when try to upload image file "Upload Failed" error this is terminal output:Content-Length: 1544238
-=== BULLETPROOF UPLOAD HANDLER ===
-Saved complete request to upload_debug.bin
-Boundary: '----geckoformboundaryb1bab4efc94bc98677d6bc5a165cd9e6'
-Filename: 'test.jpg'
-Path: '/'
-Saving to: 'user_files/test1/test.jpg'
-Found file content start via filename method
-Error: Could not find file content end
-Content starts with: \xFF\xD8\xFF\xE1\x1D\xF4Exif
-start of file 
-hi
-my name is abuzar
-how are you 
-end of file
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+
+#define MAX_BOUNDARY_LEN 256
+#define MAX_FILENAME_LEN 512
+#define MAX_PATH_LEN 1024
+#define BUFFER_SIZE 8192
+
+typedef struct {
+    char filename[MAX_FILENAME_LEN];
+    char content_type[256];
+    char *data;
+    size_t data_length;
+    int is_binary;
+} uploaded_file_t;
+
+// Helper function to create directories recursively
+int create_directory_recursive(const char *path) {
+    char temp[MAX_PATH_LEN];
+    char *p = NULL;
+    size_t len;
+    
+    snprintf(temp, sizeof(temp), "%s", path);
+    len = strlen(temp);
+    
+    if (temp[len - 1] == '/') {
+        temp[len - 1] = 0;
+    }
+    
+    for (p = temp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(temp, 0755) != 0 && errno != EEXIST) {
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+    
+    if (mkdir(temp, 0755) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    
+    return 0;
+}
+
+// Extract boundary from Content-Type header
+char* extract_boundary(const char *content_type) {
+    char *boundary_start = strstr(content_type, "boundary=");
+    if (!boundary_start) {
+        return NULL;
+    }
+    
+    boundary_start += 9; // Skip "boundary="
+    
+    // Remove quotes if present
+    if (*boundary_start == '"') {
+        boundary_start++;
+    }
+    
+    char *boundary = malloc(MAX_BOUNDARY_LEN);
+    int i = 0;
+    while (boundary_start[i] && boundary_start[i] != '"' && 
+           boundary_start[i] != ';' && boundary_start[i] != '\r' && 
+           boundary_start[i] != '\n' && i < MAX_BOUNDARY_LEN - 1) {
+        boundary[i] = boundary_start[i];
+        i++;
+    }
+    boundary[i] = '\0';
+    
+    return boundary;
+}
+
+// Check if file type is binary based on extension
+int is_binary_file(const char *filename) {
+    const char *binary_extensions[] = {
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico",
+        ".mp4", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        ".mp3", ".wav", ".ogg", ".flac",
+        ".zip", ".rar", ".7z", ".tar", ".gz",
+        ".exe", ".dll", ".so", ".bin",
+        NULL
+    };
+    
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return 0;
+    
+    for (int i = 0; binary_extensions[i]; i++) {
+        if (strcasecmp(ext, binary_extensions[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Parse filename from Content-Disposition header
+char* parse_filename(const char *disposition) {
+    char *filename_start = strstr(disposition, "filename=\"");
+    if (!filename_start) {
+        return NULL;
+    }
+    
+    filename_start += 10; // Skip 'filename="'
+    char *filename_end = strchr(filename_start, '"');
+    if (!filename_end) {
+        return NULL;
+    }
+    
+    size_t filename_len = filename_end - filename_start;
+    char *filename = malloc(filename_len + 1);
+    strncpy(filename, filename_start, filename_len);
+    filename[filename_len] = '\0';
+    
+    return filename;
+}
+
+// Main file upload handler
+int handle_file_upload(const char *request_body, size_t body_length, 
+                      const char *content_type, const char *username, 
+                      const char *upload_path) {
+    
+    printf("Starting file upload for user: %s\n", username);
+    
+    // Extract boundary
+    char *boundary = extract_boundary(content_type);
+    if (!boundary) {
+        printf("Error: Could not extract boundary from Content-Type\n");
+        return -1;
+    }
+    
+    printf("Boundary: %s\n", boundary);
+    
+    // Create full boundary markers
+    char start_boundary[MAX_BOUNDARY_LEN + 10];
+    char end_boundary[MAX_BOUNDARY_LEN + 10];
+    snprintf(start_boundary, sizeof(start_boundary), "--%s", boundary);
+    snprintf(end_boundary, sizeof(end_boundary), "--%s--", boundary);
+    
+    // Find the start of file data
+    const char *current = request_body;
+    const char *body_end = request_body + body_length;
+    
+    while (current < body_end) {
+        // Find next boundary
+        const char *boundary_pos = strstr(current, start_boundary);
+        if (!boundary_pos) {
+            break;
+        }
+        
+        current = boundary_pos + strlen(start_boundary);
+        
+        // Skip to headers
+        if (current >= body_end || (*current != '\r' && *current != '\n')) {
+            continue;
+        }
+        
+        // Skip CRLF after boundary
+        if (*current == '\r') current++;
+        if (current < body_end && *current == '\n') current++;
+        
+        // Parse headers
+        char content_disposition[512] = {0};
+        char file_content_type[256] = "application/octet-stream";
+        
+        // Read headers until empty line
+        while (current < body_end) {
+            const char *line_end = strstr(current, "\r\n");
+            if (!line_end) {
+                line_end = strchr(current, '\n');
+                if (!line_end) break;
+            }
+            
+            // Empty line marks end of headers
+            if (line_end == current || (line_end == current + 1 && *current == '\r')) {
+                current = line_end;
+                if (*current == '\r') current++;
+                if (*current == '\n') current++;
+                break;
+            }
+            
+            // Parse Content-Disposition header
+            if (strncasecmp(current, "Content-Disposition:", 20) == 0) {
+                size_t header_len = line_end - current;
+                if (header_len < sizeof(content_disposition)) {
+                    strncpy(content_disposition, current, header_len);
+                    content_disposition[header_len] = '\0';
+                }
+            }
+            
+            // Parse Content-Type header
+            if (strncasecmp(current, "Content-Type:", 13) == 0) {
+                const char *type_start = current + 13;
+                while (*type_start == ' ') type_start++;
+                size_t type_len = line_end - type_start;
+                if (type_len < sizeof(file_content_type)) {
+                    strncpy(file_content_type, type_start, type_len);
+                    file_content_type[type_len] = '\0';
+                }
+            }
+            
+            current = line_end;
+            if (*current == '\r') current++;
+            if (*current == '\n') current++;
+        }
+        
+        // Extract filename
+        char *filename = parse_filename(content_disposition);
+        if (!filename) {
+            printf("No filename found in this part, skipping\n");
+            continue;
+        }
+        
+        printf("Processing file: %s (Content-Type: %s)\n", filename, file_content_type);
+        
+        // Find end of file data
+        const char *next_boundary = strstr(current, start_boundary);
+        if (!next_boundary) {
+            next_boundary = strstr(current, end_boundary);
+        }
+        
+        if (!next_boundary) {
+            printf("Error: Could not find end boundary for file %s\n", filename);
+            free(filename);
+            continue;
+        }
+        
+        // Calculate file data length (exclude trailing CRLF before boundary)
+        size_t file_data_length = next_boundary - current;
+        if (file_data_length >= 2 && 
+            next_boundary[-2] == '\r' && next_boundary[-1] == '\n') {
+            file_data_length -= 2;
+        } else if (file_data_length >= 1 && next_boundary[-1] == '\n') {
+            file_data_length -= 1;
+        }
+        
+        // Create full file path
+        char full_path[MAX_PATH_LEN];
+        snprintf(full_path, sizeof(full_path), "user_files/%s/%s%s", 
+                username, upload_path ? upload_path : "", filename);
+        
+        printf("Saving file to: %s (size: %zu bytes)\n", full_path, file_data_length);
+        
+        // Create directory if it doesn't exist
+        char dir_path[MAX_PATH_LEN];
+        snprintf(dir_path, sizeof(dir_path), "user_files/%s/%s", 
+                username, upload_path ? upload_path : "");
+        create_directory_recursive(dir_path);
+        
+        // Determine if file is binary
+        int binary_mode = is_binary_file(filename);
+        
+        // Save file
+        FILE *file = fopen(full_path, binary_mode ? "wb" : "w");
+        if (!file) {
+            printf("Error: Could not create file %s: %s\n", full_path, strerror(errno));
+            free(filename);
+            continue;
+        }
+        
+        size_t written = fwrite(current, 1, file_data_length, file);
+        fclose(file);
+        
+        if (written != file_data_length) {
+            printf("Error: Could not write complete file %s\n", filename);
+            free(filename);
+            continue;
+        }
+        
+        printf("Successfully saved file: %s (%zu bytes)\n", filename, written);
+        free(filename);
+        
+        // Move to next part
+        current = next_boundary;
+    }
+    
+    free(boundary);
+    printf("File upload processing completed\n");
+    return 0;
+}
+
+// Example usage in your HTTP request handler
+int process_upload_request(int client_socket, const char *headers, 
+                          const char *body, size_t body_length, 
+                          const char *username) {
+    
+    // Extract Content-Type header
+    const char *content_type_line = strstr(headers, "Content-Type:");
+    if (!content_type_line) {
+        const char *error_response = 
+            "HTTP/1.1 400 Bad Request\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 26\r\n"
+            "\r\n"
+            "Missing Content-Type header";
+        send(client_socket, error_response, strlen(error_response), 0);
+        return -1;
+    }
+    
+    // Parse the upload path from query parameters if needed
+    const char *upload_path = ""; // You can extract this from URL parameters
+    
+    // Handle the file upload
+    int result = handle_file_upload(body, body_length, content_type_line, 
+                                   username, upload_path);
+    
+    if (result == 0) {
+        // Success response
+        const char *success_response = 
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/html\r\n"
+            "Content-Length: 47\r\n"
+            "\r\n"
+            "<html><body><h1>File uploaded successfully!</h1></body></html>";
+        send(client_socket, success_response, strlen(success_response), 0);
+    } else {
+        // Error response
+        const char *error_response = 
+            "HTTP/1.1 500 Internal Server Error\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 19\r\n"
+            "\r\n"
+            "File upload failed";
+        send(client_socket, error_response, strlen(error_response), 0);
+    }
+    
+    return result;
+}
