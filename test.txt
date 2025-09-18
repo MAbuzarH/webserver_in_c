@@ -1,0 +1,15 @@
+when we upload code file every thing work. but when try to upload image file "Upload Failed" error this is terminal output:Content-Length: 1544238
+=== BULLETPROOF UPLOAD HANDLER ===
+Saved complete request to upload_debug.bin
+Boundary: '----geckoformboundaryb1bab4efc94bc98677d6bc5a165cd9e6'
+Filename: 'test.jpg'
+Path: '/'
+Saving to: 'user_files/test1/test.jpg'
+Found file content start via filename method
+Error: Could not find file content end
+Content starts with: \xFF\xD8\xFF\xE1\x1D\xF4Exif
+start of file 
+hi
+my name is abuzar
+how are you 
+end of file

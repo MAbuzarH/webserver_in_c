@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "socket.h": "c",
-        "php_handler.h": "c"
+        "php_handler.h": "c",
+        "err.h": "c"
     }
 }

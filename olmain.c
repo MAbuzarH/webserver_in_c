@@ -1,7 +1,5 @@
 // main.c
-//command to run program
-//gcc main.c http_handler.c https_server.c session.c auth.c php_handler.c thread_safe.c -lssl -lcrypto -lpthread -luuid  -o server
-
+// Main server logic and request handling.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,53 +8,66 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <libgen.h>
-#include <sys/stat.h>
+#include <libgen.h> // For dirname
+#include <sys/stat.h> // For mkdir
 #include <sys/types.h>
 #include <dirent.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
 
 #include "http_handler.h"
-#include "https_handler.h"
-#include "https_server.h"
 #include "thread_safe.h"
+#include "https_server.h"
 #include "php_handler.h"
 #include "session.h"
 #include "auth.h"
 
 #define HTTP_PORT 8080
-#define HTTPS_PORT 8443  // Use 443 for standard HTTPS if permitted
+// #define HTTPS_PORT 8080
 #define BUFFER_SIZE 8192
 
-// Forward declarations for thread handler functions
-void* handle_http_client(void* arg);
-void* handle_https_client(void* arg);
+// Global error message buffer
+char error_msg[256];
 
+
+/**
+ * @brief Checks if a request URL matches a specific path.
+ * @param request_url The URL from the request.
+ * @param path The path to check against.
+ * @return true if the URL matches the path exactly, false otherwise.
+ */
+bool url_matches(const char *request_url, const char *path) {
+    // Exact match, ignoring any query strings
+    size_t path_len = strlen(path);
+    if (strncmp(request_url, path, path_len) == 0) {
+        // Check if the URL ends exactly after the path or is followed by a query string '?'
+        if (request_url[path_len] == '\0' || request_url[path_len] == '?') {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * @brief Thread function to handle a single client connection.
  * @param arg The client socket file descriptor.
  * @return NULL.
  */
-void handle_client(int c) {
+void *handle_client(void *arg) {
     // Read the full HTTP request from the client socket.
-    // int c = *((int*)arg);
-    // free(arg); // Free the memory allocated in the main thread
+    int c = *((int*)arg);
+    free(arg); // Free the memory allocated in the main thread
 
     // Check for a valid socket before proceeding
     if (c < 0) {
         printf("Invalid client socket.\n");
-        return;
+        return NULL;
     } 
    size_t request_length = 0;
     // char *request = read_full_request(c,&request_length);
-    // char *request = read_full_request(c,&request_length);
-    char *request = read_full_request(c);
+    char *request = read_full_request(c,&request_length);
     if (!request) {
         printf("Failed to read request.\n");
         close(c);
-        return;
+        return NULL;
     }
 
     // Parse the raw request string into a structured httpreq object.
@@ -64,7 +75,7 @@ void handle_client(int c) {
     if (!req) {
         printf("Failed to parse request.\n");
         free(request);
-        return ;
+        return NULL;
     }
 
     // Extract the session ID from the request headers to authenticate the user.
@@ -224,7 +235,7 @@ else if (strcmp(req->url, "/upload") == 0 && strcmp(req->method, "POST") == 0) {
         size_t request_len = strlen(request); // This will be updated in read_full_request
         
         // For all file types, use the same upload handler
-        if (http_handle_upload(request, session->username)) {
+        if (http_handle_upload(c, request, session->username, content_length)) {
             // Extract path for redirect
             char path[256] = "/";
             const char *body = strstr(request, "\r\n\r\n");
@@ -325,213 +336,76 @@ else if (strcmp(req->url, "/upload") == 0 && strcmp(req->method, "POST") == 0) {
     close(c);
 }
 
-/**
- * @brief Checks if a request URL matches a specific path.
- * @param request_url The URL from the request.
- * @param path The path to check against.
- * @return true if the URL matches the path exactly, false otherwise.
- */
-bool url_matches(const char *request_url, const char *path) {
-    size_t path_len = strlen(path);
-    return (strncmp(request_url, path, path_len) == 0 &&
-           (request_url[path_len] == '\0' || request_url[path_len] == '?'));
-}
 
+/**
+ * @brief Sets up and runs the server.
+ */
 int main() {
-    int http_sock, https_sock;
+    int s;
     struct sockaddr_in server_addr;
-    
-    // Initialize OpenSSL
-    initialize_openssl();
-    
-    // Create SSL context
-    SSL_CTX* ssl_ctx = create_ssl_context("cert.pem", "key.pem");
-    if (!ssl_ctx) {
-        fprintf(stderr, "Failed to create SSL context\n");
+
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+        perror("Socket creation failed");
         return EXIT_FAILURE;
     }
-    
-    // Create HTTP socket
-    http_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (http_sock < 0) {
-        perror("HTTP socket creation failed");
-        SSL_CTX_free(ssl_ctx);
-        return EXIT_FAILURE;
-    }
-    
-    int reuse = 1;
-    setsockopt(http_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    
+
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(HTTP_PORT);
-    
-    if (bind(http_sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("HTTP bind failed");
-        SSL_CTX_free(ssl_ctx);
-        close(http_sock);
-        return EXIT_FAILURE;
-    }
-    
-    if (listen(http_sock, 5) < 0) {
-        perror("HTTP listen failed");
-        SSL_CTX_free(ssl_ctx);
-        close(http_sock);
-        return EXIT_FAILURE;
-    }
-    
-    // Create HTTPS listening socket using helper function
-    https_sock = create_https_listener(HTTPS_PORT);
-    if (https_sock < 0) {
-        fprintf(stderr, "Failed to create HTTPS listener socket\n");
-        SSL_CTX_free(ssl_ctx);
-        close(http_sock);
+
+    if (bind(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(s);
         return EXIT_FAILURE;
     }
 
-    printf("Server listening on HTTP port %d and HTTPS port %d\n", HTTP_PORT, HTTPS_PORT);
+    if (listen(s, 5) < 0) {
+        perror("Listen failed");
+        close(s);
+        return EXIT_FAILURE;
+    }
+
+    printf("Server listening on port %d...\n", HTTP_PORT);
     fflush(stdout);
-    
-    fd_set readfds;
-    int max_fd = (http_sock > https_sock) ? http_sock : https_sock;
-    
+
+
+    //test_php_fpm_connection();
+
     while (1) {
-        FD_ZERO(&readfds);
-        FD_SET(http_sock, &readfds);
-        FD_SET(https_sock, &readfds);
-        
-        int activity = select(max_fd + 1, &readfds, NULL, NULL, NULL);
-        if (activity < 0) {
-            perror("select error");
+        int *client_sock = malloc(sizeof(int));
+        if (!client_sock) {
+            perror("Failed to allocate memory for client socket");
             continue;
         }
-        
-        // Handle HTTP connection
-        if (FD_ISSET(http_sock, &readfds)) {
-            int* client_sock = malloc(sizeof(int));
-            if (!client_sock) {
-                perror("Failed to allocate memory for HTTP client socket");
-                continue;
-            }
-            *client_sock = accept(http_sock, NULL, NULL);
-            if (*client_sock < 0) {
-                perror("HTTP accept failed");
-                free(client_sock);
-                continue;
-            }
-            pthread_t tid;
-            pthread_create(&tid, NULL, handle_http_client, client_sock);
-            pthread_detach(tid);
+        *client_sock = accept(s, NULL, NULL);
+        if (*client_sock < 0) {
+            perror("Accept failed");
+            free(client_sock);
+            continue;
         }
-        
-        // Handle HTTPS connection
-        if (FD_ISSET(https_sock, &readfds)) {
-            SSL* ssl_client = accept_https_connection(ssl_ctx, https_sock);
-            if (!ssl_client) {
-                fprintf(stderr, "SSL accept failed for HTTPS client\n");
-                continue;
-            }
-            pthread_t tid;
-            pthread_create(&tid, NULL, handle_https_client, ssl_client);
-            pthread_detach(tid);
+
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, handle_client, (void *)client_sock) != 0) {
+            perror("Thread creation failed");
+            free(client_sock);
+            close(*client_sock);
+            continue;
         }
+        pthread_detach(thread_id);
     }
-    
-    close(http_sock);
-    close(https_sock);
-    SSL_CTX_free(ssl_ctx);
+
+    close(s);
     return EXIT_SUCCESS;
 }
 
-// Thread function for handling HTTP connections (existing code)
-void* handle_http_client(void* arg) {
-    int client_sock = *((int*)arg);
-    free(arg);
-    handle_client(client_sock);  // Reuse existing handle_client with socket
-    return NULL;
-}
-
-// Thread function for handling HTTPS connections
-void* handle_https_client(void* arg) {
-    SSL* ssl = (SSL*)arg;
-
-    size_t request_length = 0;
-    char* request = read_full_request_ssl(ssl, &request_length);
-    if (!request) {
-        SSL_shutdown(ssl);
-        int sockfd = SSL_get_fd(ssl);
-        SSL_free(ssl);
-        close(sockfd);
-        return NULL;
-    }
-
-    httpreq* req = parse_http(request);
-    if (!req) {
-        free(request);
-        SSL_shutdown(ssl);
-        int sockfd = SSL_get_fd(ssl);
-        SSL_free(ssl);
-        close(sockfd);
-        return NULL;
-    }
-
-     const char *session_id = get_session_id_from_request(request);
-    Session *session = NULL;
-    if (session_id) {
-         session = get_session_ts(session_id);
-        //session = get_session(session_id);
-    }
-    
-    // Log the received request for debugging purposes.
-    printf("Received request: Method=%s, URL=%s\n", req->method, req->url);
-
-    // For demonstration, simple GET "/" handling
-    if (strcmp(req->url, "/") == 0 && strcmp(req->method, "GET") == 0) {
-          https_send_welcome_page(ssl);
+//   if(strcmp(req->url,".php")){
+//         if (!session) {
+//             http_send_redirect(c, "/login");
+//         } else{
+//         printf("routing to php request...\n");
+//         http_handle_php_request(c, req->url,session->username);
+//         }
        
-        // https_send_redirect(ssl,"/login");
-        // const char* response_body = "<html><body><h1>Welcome to the HTTPS server!</h1></body></html>";
-        // char header[512];
-        // snprintf(header, sizeof(header),
-        //          "HTTP/1.1 200 OK\r\n"
-        //          "Content-Type: text/html\r\n"
-        //          "Content-Length: %zu\r\n"
-        //          "Connection: close\r\n"
-        //          "\r\n",
-        //          strlen(response_body));
-
-        // // Send headers
-        // ssl_send_wrapper(ssl, header, strlen(header));
-        // // Send body
-        // ssl_send_wrapper(ssl, response_body, strlen(response_body));
-    } else {
-        // Handle other routes or send 404
-        const char* response_body = "Not Found";
-        char header[512];
-        snprintf(header, sizeof(header),
-                 "HTTP/1.1 404 Not Found\r\n"
-                 "Content-Type: text/plain\r\n"
-                 "Content-Length: %zu\r\n"
-                 "Connection: close\r\n"
-                 "\r\n",
-                 strlen(response_body));
-
-        ssl_send_wrapper(ssl, header, strlen(header));
-        ssl_send_wrapper(ssl, response_body, strlen(response_body));
-    }
-
-    free(req->method);
-    free(req->url);
-    free(req->protocol);
-    free(req);
-
-    free(request);
-
-    SSL_shutdown(ssl);
-    int sockfd = SSL_get_fd(ssl);
-    SSL_free(ssl);
-    close(sockfd);
-    return NULL;
-}
-
+//     }

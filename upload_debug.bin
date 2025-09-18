@@ -1,0 +1,25 @@
+POST /upload HTTP/1.1
+Host: localhost:8080
+User-Agent: Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br, zstd
+Content-Type: multipart/form-data; boundary=----geckoformboundary9ac1b43b4ec2eaf8b13cec54dff9711e
+Content-Length: 890
+Origin: http://localhost:8080
+Connection: keep-alive
+Referer: http://localhost:8080/dashboard?path=/
+Cookie: session_id=9c95a442-02f3-4d7e-befb-b0d87d5c85a8
+Upgrade-Insecure-Requests: 1
+Sec-Fetch-Dest: document
+Sec-Fetch-Mode: navigate
+Sec-Fetch-Site: same-origin
+Sec-Fetch-User: ?1
+Priority: u=0, i
+
+------geckoformboundary9ac1b43b4ec2eaf8b13cec54dff9711e
+Content-Disposition: form-data; name="path"
+
+/
+------geckoformboundary9ac1b43b4ec2eaf8b13cec54dff9711e
+Content-D

@@ -8,28 +8,41 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include<sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <stdint.h>
+#include <ctype.h>
 
 #define BUFFER_SIZE 8192
 #define MAX_USERNAME_LENGTH 63
 
-// Helper function to find a header in the request
-// const char *find_header(const char *request, const char *header_name) {
-//     const char *header_start = strstr(request, header_name);
-//     if (!header_start) {
-//         return NULL;
-//     }
-//     header_start += strlen(header_name);
-//     while (*header_start == ' ' || *header_start == ':') {
-//         header_start++;
-//     }
-//     return header_start;
-// }
 
+// URL encode function
+void urlencode(char *dest, const char *src) {
+    const char *hex = "0123456789ABCDEF";
+    size_t i = 0, j = 0;
+    
+    while (src[i] && j < 255) {
+        if (isalnum(src[i]) || src[i] == '-' || src[i] == '_' || src[i] == '.' || src[i] == '~') {
+            dest[j++] = src[i];
+        } else if (src[i] == ' ') {
+            dest[j++] = '+';
+        } else {
+            dest[j++] = '%';
+            dest[j++] = hex[(src[i] >> 4) & 0xF];
+            dest[j++] = hex[src[i] & 0xF];
+        }
+        i++;
+    }
+    dest[j] = '\0';
+}
+
+
+// Helper function to find a header in the request
 const char *find_header(const char *request, const char *header_name) {
     char search_str[256];
     snprintf(search_str, sizeof(search_str), "%s", header_name);
@@ -71,35 +84,166 @@ const char *find_header(const char *request, const char *header_name) {
  * @param client_socket The client socket file descriptor.
  * @return A dynamically allocated string containing the full request, or NULL on error.
  */
+static char* reallocate_buffer(char* buffer, size_t old_size, size_t new_size) {
+    char* new_buffer = realloc(buffer, new_size);
+    if (!new_buffer) {
+        free(buffer);
+        perror("Failed to reallocate buffer.");
+        return NULL;
+    }
+    return new_buffer;
+}
 
-char* read_full_request(int client_socket) {
-    char *request = NULL;
-    size_t total_size = 0;
-    ssize_t bytes_received;
-    char buffer[1024];
+/**
+ * Reads the full HTTP request from a socket.
+ */
+char* read_full_request(int c) {
+    char* request = NULL;
+    size_t buffer_size = 1024;
+    size_t total_received = 0;
     
-    // Read the headers first
-    while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-        request = realloc(request, total_size + bytes_received + 1);
-        memcpy(request + total_size, buffer, bytes_received);
-        total_size += bytes_received;
-        request[total_size] = '\0';
-
-        // Check for the end of headers marker
+    request = malloc(buffer_size);
+    if (!request) {
+        perror( "Failed to allocate memory for request.");
+        return NULL;
+    }
+    
+    int bytes_received;
+    while ((bytes_received = recv(c, request + total_received, buffer_size - total_received - 1, 0)) > 0) {
+        total_received += bytes_received;
+        request[total_received] = '\0';
+        
+        // Check for end of headers
         if (strstr(request, "\r\n\r\n")) {
-            return request;
+            // Found the end of headers, now check for body
+            char* content_length_str = strstr(request, "Content-Length:");
+            if (content_length_str) {
+                int content_length = atoi(content_length_str + strlen("Content-Length:"));
+                size_t headers_length = strstr(request, "\r\n\r\n") - request + 4;
+                if (total_received >= headers_length + content_length) {
+                    break;
+                }
+            } else {
+                break; // No content-length, so headers are the end
+            }
+        }
+        
+        // Resize buffer if needed
+        if (total_received >= buffer_size - 1) {
+            buffer_size *= 2;
+            request = reallocate_buffer(request, total_received, buffer_size);
+            if (!request) return NULL;
         }
     }
-
-    if (bytes_received <= 0) {
-        if (request) {
-            free(request);
-        }
+    
+    if (bytes_received < 0) {
+        free(request);
+        perror("Recv() error:");
         return NULL;
     }
     
     return request;
 }
+
+
+// char* read_full_request(int client_socket, size_t *total_size_out) {
+//     char *request = NULL;
+//     size_t total_size = 0;
+//     ssize_t bytes_received;
+//     char buffer[4096];
+//     int content_length = -1;
+//     int headers_received = 0;
+
+//     // Read headers first
+//     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+//         printf("Received %zd bytes in header phase\n", bytes_received);
+        
+//         char *new_request = realloc(request, total_size + bytes_received + 1);
+//         if (!new_request) {
+//             printf("Realloc failed at header phase\n");
+//             free(request);
+//             return NULL;
+//         }
+//         request = new_request;
+        
+//         memcpy(request + total_size, buffer, bytes_received);
+//         total_size += bytes_received;
+//         request[total_size] = '\0';
+
+//         // Check for end of headers
+//         char *header_end = strstr(request, "\r\n\r\n");
+//         if (header_end) {
+//             headers_received = 1;
+            
+//             // Extract Content-Length
+//             char *cl_header = strstr(request, "Content-Length:");
+//             if (cl_header) {
+//                 content_length = atoi(cl_header + strlen("Content-Length:"));
+//                 printf("Content-Length: %d\n", content_length);
+//             }
+//             break;
+//         }
+        
+//         if (total_size > 16384) {
+//             printf("Header size limit exceeded\n");
+//             break;
+//         }
+//     }
+
+//     if (!headers_received || bytes_received <= 0) {
+//         printf("Failed to read headers\n");
+//         free(request);
+//         return NULL;
+//     }
+
+//     // Calculate total expected request size
+//     char *body_start = strstr(request, "\r\n\r\n") + 4;
+//     size_t headers_size = body_start - request;
+//     size_t total_expected_size = headers_size + content_length;
+
+//     printf("Headers size: %zu, Expected total: %zu, Current: %zu\n", 
+//            headers_size, total_expected_size, total_size);
+
+//     // Read remaining data
+//     while (total_size < total_expected_size) {
+//         size_t remaining = total_expected_size - total_size;
+//         size_t to_read = (remaining < sizeof(buffer)) ? remaining : sizeof(buffer);
+        
+//         bytes_received = recv(client_socket, buffer, to_read, 0);
+//         if (bytes_received <= 0) {
+//             printf("Recv error or connection closed. Expected: %zu, Got: %zu\n", 
+//                    total_expected_size, total_size);
+//             break;
+//         }
+        
+//         printf("Received %zd bytes in body phase\n", bytes_received);
+        
+//         char *new_request = realloc(request, total_size + bytes_received + 1);
+//         if (!new_request) {
+//             printf("Realloc failed for %zu bytes\n", total_size + bytes_received);
+//             free(request);
+//             return NULL;
+//         }
+//         request = new_request;
+        
+//         memcpy(request + total_size, buffer, bytes_received);
+//         total_size += bytes_received;
+        
+//         printf("Progress: %zu/%zu bytes (%.1f%%)\n", 
+//                total_size, total_expected_size,
+//                ((double)total_size / total_expected_size) * 100);
+//     }
+
+//     request[total_size] = '\0';
+    
+//     if (total_size_out) {
+//         *total_size_out = total_size;
+//     }
+    
+//     printf("Final total request size: %zu bytes\n", total_size);
+//     return request;
+// }
+
 
 /**
  * @brief Parses the HTTP request line.
@@ -164,6 +308,7 @@ void http_send_response(int client_socket, int status_code, const char *content_
              
     send(client_socket, header_buffer, strlen(header_buffer), 0);
     send(client_socket, body, body_len, 0);
+    
 }
 
 /**
@@ -633,359 +778,325 @@ bool handle_create_folder(const char *request, const char *username) {
 
 // Helper function to find a needle in a haystack (like strstr but for binary data)
 // Helper function to find a needle in a haystack (like strstr but for binary data)
-void *memmem(const void *haystack, size_t haystack_len, 
-            const void *needle, size_t needle_len) {
-    if (needle_len == 0) return (void *)haystack;
-    if (haystack_len < needle_len) return NULL;
-    
-    const char *haystack_ptr = (const char *)haystack;
-    const char *needle_ptr = (const char *)needle;
-    
+// Binary-safe memory search function
+const char* find_boundary(const char *haystack, size_t haystack_len,
+                          const char *needle, size_t needle_len) {
+    if (needle_len == 0 || haystack_len < needle_len) return NULL;
+
     for (size_t i = 0; i <= haystack_len - needle_len; i++) {
-        if (memcmp(haystack_ptr + i, needle_ptr, needle_len) == 0) {
-            return (void *)(haystack_ptr + i);
+        if (memcmp(haystack + i, needle, needle_len) == 0) {
+            return haystack + i;
         }
     }
-    
     return NULL;
 }
 
-/**
- * @brief Handles a multipart/form-data file upload request.
- * @param client_socket The client socket.
- * @param request The full HTTP request headers.
- * @param username The username of the session.
- * @return true on success, false on failure.
- */
-// http_handler.c - Corrected http_handle_upload function
+//  bool http_handle_upload(int client_socket, const char *full_request, const char *username, int content_length) {
+//     printf("=== BULLETPROOF UPLOAD HANDLER ===\n");
+    
+//     // 1. First, save the complete request for debugging
+//     FILE *debug = fopen("upload_debug.bin", "wb");
+//     if (debug) {
+//         fwrite(full_request, 1, strlen(full_request), debug);
+//         fclose(debug);
+//         printf("Saved complete request to upload_debug.bin\n");
+//     }
 
-bool http_handle_upload(int client_socket, const char *request_headers, const char *username, int content_length) {
-    printf("Starting file upload process...\n");
-    
-    // 1. Extract boundary from Content-Type header
-    const char *content_type = find_header(request_headers, "Content-Type:");
-    if (!content_type) {
-        printf("Error: No Content-Type header found\n");
-        return false;
-    }
-    
-    const char *boundary_start = strstr(content_type, "boundary=");
-    if (!boundary_start) {
-        printf("Error: No boundary found in Content-Type\n");
-        return false;
-    }
-    boundary_start += strlen("boundary=");
-    
-    // Extract the boundary string
-    char boundary[100];
-    const char *boundary_end = strchr(boundary_start, ';');
-    if (boundary_end) {
-        strncpy(boundary, boundary_start, boundary_end - boundary_start);
-        boundary[boundary_end - boundary_start] = '\0';
-    } else {
-        strncpy(boundary, boundary_start, sizeof(boundary) - 1);
-        boundary[sizeof(boundary) - 1] = '\0';
-    }
-    
-    printf("Boundary: %s\n", boundary);
-    
-    // 2. Extract filename
-    const char *filename_start = strstr(request_headers, "filename=\"");
-    if (!filename_start) {
-        printf("Error: No filename found in request\n");
-        return false;
-    }
-    filename_start += strlen("filename=\"");
-    
-    const char *filename_end = strchr(filename_start, '\"');
-    if (!filename_end) {
-        printf("Error: Malformed filename\n");
-        return false;
-    }
-    
-    char filename[256];
-    strncpy(filename, filename_start, filename_end - filename_start);
-    filename[filename_end - filename_start] = '\0';
-    printf("Filename: %s\n", filename);
-    
-    // 3. Extract path parameter
-    char path[256] = "/";
-    const char *path_param = strstr(request_headers, "name=\"path\"");
-    if (path_param) {
-        path_param = strstr(path_param, "\r\n\r\n");
-        if (path_param) {
-            path_param += 4;
-            const char *path_end = strstr(path_param, boundary);
-            if (path_end) {
-                strncpy(path, path_param, path_end - path_param - 2); // -2 for \r\n
-                path[path_end - path_param - 2] = '\0';
-            }
-        }
-    }
-    
-    // URL decode the path
-    char decoded_path[256];
-    urldecode(decoded_path, path);
-    printf("Upload path: %s\n", decoded_path);
-    
-   // 4. Create target directory if it doesn't exist
-char file_directory[512];
-if (strcmp(decoded_path, "/") == 0) {
-    snprintf(file_directory, sizeof(file_directory), "user_files/%s", username);
-} else {
-    snprintf(file_directory, sizeof(file_directory), "user_files/%s%s", username, decoded_path);
-}
-
-printf("Creating directory: %s\n", file_directory);
-    
-if (create_full_path(file_directory, 0777) != 0) {
-    printf("Error: Failed to create directory %s\n", file_directory);
-    return false;
-}
-
-// 5. Create the file for writing
-char filepath[1024];
-if (strcmp(decoded_path, "/") == 0) {
-    snprintf(filepath, sizeof(filepath), "user_files/%s/%s", username, filename);
-} else {
-    snprintf(filepath, sizeof(filepath), "user_files/%s%s/%s", username, decoded_path, filename);
-}
-
-printf("Saving to: %s\n", filepath);
-    // 5. Create the file for writing
-   // char filepath[1024];
-    //snprintf(filepath, sizeof(filepath), "%s/%s", file_directory, filename);
-    // Handle the case where decoded_path might be "/"
-// if (strcmp(decoded_path, "/") == 0) {
-//     snprintf(filepath, sizeof(filepath), "user_files/%s/%s", username, filename);
-// } else {
-//     snprintf(filepath, sizeof(filepath), "user_files/%s%s/%s", username, decoded_path, filename);
-// }
-//     printf("Saving to: %s\n", filepath);
-    
-    FILE *file = fopen(filepath, "wb");
-    if (!file) {
-        printf("Error: Failed to create file %s\n", filepath);
-        perror("fopen");
-        return false;
-    }
-    
-    // 6. Find where the file content starts in the initial request headers
-    const char *file_content_start = strstr(request_headers, "\r\n\r\n");
-    if (file_content_start) {
-        file_content_start += 4; // Skip \r\n\r\n
-        
-        // Check if there's file content in the initial headers
-        const char *next_boundary = strstr(file_content_start, boundary);
-        if (next_boundary) {
-            // Write content up to the boundary
-            fwrite(file_content_start, 1, next_boundary - file_content_start - 2, file); // -2 for \r\n
-        } else {
-            // Write all content from headers
-            fwrite(file_content_start, 1, strlen(file_content_start), file);
-        }
-    }
-    
-    // 7. Stream the remaining data from the socket
-char buffer[8192];
-ssize_t bytes_read;
-size_t total_received = strlen(request_headers);
-int boundary_found = 0;
-
-printf("Starting to stream file content...\n");
-printf("Expected total size: %d bytes\n", content_length);
-
-// Calculate how much data we've already processed from headers
-size_t already_processed = 0;
-if (file_content_start) {
-    const char *request_end = request_headers + strlen(request_headers);
-    already_processed = request_end - file_content_start;
-    if (already_processed > 0) {
-        printf("Already processed %zu bytes from headers\n", already_processed);
-    }
-}
-
-while (!boundary_found && total_received < content_length) {
-    size_t to_read = sizeof(buffer);
-    size_t remaining = content_length - total_received;
-    
-    if (to_read > remaining) {
-        to_read = remaining;
-    }
-    
-    bytes_read = recv(client_socket, buffer, to_read, 0);
-    if (bytes_read <= 0) {
-        if (bytes_read == 0) {
-            printf("Error: Connection closed by client during upload\n");
-        } else {
-            perror("Error receiving data during upload");
-        }
-        fclose(file);
-        return false;
-    }
-    
-    total_received += bytes_read;
-    
-    // Check for boundary in the received data
-    char *boundary_pos = memmem(buffer, bytes_read, boundary, strlen(boundary));
-    
-    if (boundary_pos) {
-        // Write only up to the boundary
-        size_t bytes_to_write = boundary_pos - buffer - 2; // -2 for \r\n
-        if (bytes_to_write > 0) {
-            fwrite(buffer, 1, bytes_to_write, file);
-        }
-        boundary_found = 1;
-        printf("Boundary found, upload complete. Total received: %zu bytes\n", total_received);
-    } else {
-        // Write entire chunk
-        fwrite(buffer, 1, bytes_read, file);
-        if (total_received % 65536 == 0) { // Log every 64KB
-            printf("Received %zu/%d bytes (%.1f%%)\n", 
-                   total_received, content_length, 
-                   (float)total_received / content_length * 100);
-        }
-    }
-}
-
-// Verify we received the complete file
-if (total_received >= content_length && !boundary_found) {
-    printf("Warning: Upload completed but boundary not found. File may be incomplete.\n");
-}
-    
-    
-    file = fopen(filepath, "wb");
-if (!file) {
-    printf("Error: Failed to create file %s\n", filepath);
-    perror("fopen error");
-    
-    // Check if directory exists and is writable
-    if (access(file_directory, F_OK) != 0) {
-        printf("Directory %s does not exist\n", file_directory);
-    } else if (access(file_directory, W_OK) != 0) {
-        printf("No write permission to directory %s\n", file_directory);
-    }
-    
-    return false;
-}
-fclose(file);
-
-// Verify file was created and has content
-struct stat file_stat;
-if (stat(filepath, &file_stat) == 0) {
-    printf("File created successfully: %s, Size: %ld bytes\n", 
-           filepath, file_stat.st_size);
-} else {
-    printf("Error: File was not created properly at %s\n", filepath);
-    perror("stat error");
-    return false;
-}
-
-printf("File upload successful: %s (%zu bytes)\n", filename, total_received);
-return true;
-// fclose(file);
-// printf("File upload successful: %s (%zu bytes)\n", filename, total_received);
-// return true;
-}
-
-
-// bool http_handle_upload(int client_socket, const char *request, const char *username) {
-//     // Correctly find boundary
-//     pthread_mutex_lock(&file_mutex);
-//     const char *boundary_start = strstr(request, "boundary=");
-//     if (!boundary_start) return false;
-//     boundary_start += strlen("boundary=");
-//     const char *boundary_end = strstr(boundary_start, "\r\n");
-//     if (!boundary_end) return false;
-//     size_t boundary_len = boundary_end - boundary_start;
-    
-//     char boundary[boundary_len + 3];
-//     snprintf(boundary, sizeof(boundary), "--%.*s", (int)boundary_len, boundary_start);
-    
-//     // Correctly find filename
-//     const char *filename_start = strstr(request, "filename=\"");
-//     if (!filename_start) return false;
-//     filename_start += strlen("filename=\"");
-//     const char *filename_end = strchr(filename_start, '"');
-//     if (!filename_end) return false;
-//     size_t filename_len = filename_end - filename_start;
-    
-//     char filename[256];
-//     if (filename_len >= sizeof(filename)) {
+//     // 2. Extract boundary
+//     const char *content_type = find_header(full_request, "Content-Type:");
+//     if (!content_type) {
+//         printf("Error: No Content-Type header\n");
 //         return false;
 //     }
-//     strncpy(filename, filename_start, filename_len);
-//     filename[filename_len] = '\0';
+    
+//     const char *boundary_start = strstr(content_type, "boundary=");
+//     if (!boundary_start) {
+//         printf("Error: No boundary in Content-Type\n");
+//         return false;
+//     }
+//     boundary_start += strlen("boundary=");
+    
+//     char boundary[100];
+//     const char *boundary_end = strpbrk(boundary_start, ";\r\n");
+//     if (boundary_end) {
+//         strncpy(boundary, boundary_start, boundary_end - boundary_start);
+//         boundary[boundary_end - boundary_start] = '\0';
+//     } else {
+//         strncpy(boundary, boundary_start, sizeof(boundary) - 1);
+//         boundary[sizeof(boundary) - 1] = '\0';
+//     }
+//     printf("Boundary: '%s'\n", boundary);
 
-//     // Find the current path from the form data
-//     char path[256] = "/";
-//     const char *path_param = strstr(request, "name=\"path\"");
-//     if (path_param) {
-//         path_param = strstr(path_param, "\r\n\r\n") + 4;
-//         const char *path_end = strstr(path_param, boundary);
-//         if (path_end) {
-//             size_t path_len = path_end - path_param - 2; // -2 for \r\n;
-//             if (path_len > 0 && path_len < sizeof(path)) {
-//                 strncpy(path, path_param, path_len);
-//                 path[path_len] = '\0';
+//     // 3. Extract filename using a more robust method
+//     char filename[256] = {0};
+//     const char *filename_ptr = full_request;
+    
+//     // Try multiple patterns to find filename
+//     const char *patterns[] = {
+//         "filename=\"",
+//         "filename=",
+//         "name=\"file\"; filename=\"",
+//         NULL
+//     };
+    
+//     for (int i = 0; patterns[i] != NULL; i++) {
+//         filename_ptr = strstr(full_request, patterns[i]);
+//         if (filename_ptr) {
+//             filename_ptr += strlen(patterns[i]);
+//             const char *filename_end = strchr(filename_ptr, '"');
+//             if (filename_end) {
+//                 strncpy(filename, filename_ptr, filename_end - filename_ptr);
+//                 filename[filename_end - filename_ptr] = '\0';
+//                 break;
 //             }
 //         }
 //     }
     
-//     // Now decode the path correctly
+//     if (strlen(filename) == 0) {
+//         printf("Error: Could not extract filename\n");
+//         return false;
+//     }
+//     printf("Filename: '%s'\n", filename);
+
+//     // 4. Extract path
+//     char path[256] = "/";
+//     const char *path_ptr = strstr(full_request, "name=\"path\"");
+//     if (path_ptr) {
+//         path_ptr = strstr(path_ptr, "\r\n\r\n");
+//         if (path_ptr) {
+//             path_ptr += 4;
+//             const char *path_end = strstr(path_ptr, "\r\n");
+//             if (path_end) {
+//                 strncpy(path, path_ptr, path_end - path_ptr);
+//                 path[path_end - path_ptr] = '\0';
+//             }
+//         }
+//     }
+    
 //     char decoded_path[256];
 //     urldecode(decoded_path, path);
+//     printf("Path: '%s'\n", decoded_path);
 
-//     // Find the start of the file content.
-//     // The body starts after the headers, but the file content starts after its own form part.
-//     // We need to find the `\r\n\r\n` that separates the file part headers from its content.
-//     const char *file_body_start = strstr(filename_end, "\r\n\r\n");
-//     if (!file_body_start) return false;
-//     file_body_start += 4; // Move past the `\r\n\r\n`
+//     // 5. Create file path
+//     char filepath[1024];
+//     if (strcmp(decoded_path, "/") == 0) {
+//         snprintf(filepath, sizeof(filepath), "user_files/%s/%s", username, filename);
+//     } else {
+//         snprintf(filepath, sizeof(filepath), "user_files/%s%s/%s", username, decoded_path, filename);
+//     }
+//     printf("Saving to: '%s'\n", filepath);
 
-//     // Build the full path for the new file
-//     char file_directory[512];
-//     snprintf(file_directory, sizeof(file_directory), "user_files/%s%s", username, decoded_path);
-//     if (create_full_path(file_directory, 0777) != 0) {
-//         perror("Failed to create parent directory for upload");     
+//     // 6. ROBUST CONTENT EXTRACTION - Try multiple methods
+//     const char *file_content_start = NULL;
+//     const char *file_content_end = NULL;
+//     size_t file_size = 0;
+
+//     // Method 1: Look for the file content after filename
+//     const char *file_section = strstr(full_request, "filename=");
+//     if (file_section) {
+//         file_section = strstr(file_section, "\r\n\r\n");
+//         if (file_section) {
+//             file_content_start = file_section + 4;
+//             printf("Found file content start via filename method\n");
+//         }
+//     }
+
+//     // Method 2: Look for second occurrence of \r\n\r\n
+//     if (!file_content_start) {
+//         const char *first_newline = strstr(full_request, "\r\n\r\n");
+//         if (first_newline) {
+//             file_content_start = strstr(first_newline + 4, "\r\n\r\n");
+//             if (file_content_start) {
+//                 file_content_start += 4;
+//                 printf("Found file content start via double newline method\n");
+//             }
+//         }
+//     }
+
+//     if (!file_content_start) {
+//         printf("Error: Could not find file content start using any method\n");
 //         return false;
 //     }
 
-//     char filepath[1024];
-//     snprintf(filepath, sizeof(filepath), "%s%s", file_directory, filename); // Correct path construction
+//     // 7. Find the end of file content using multiple boundary patterns
+//     const char *boundary_patterns[] = {
+//         "\r\n--",      // Most common
+//         "--",          // Alternative
+//         "\n--",        // Unix line endings
+//         NULL
+//     };
 
+//     for (int i = 0; boundary_patterns[i] != NULL && !file_content_end; i++) {
+//         char end_pattern[150];
+//         snprintf(end_pattern, sizeof(end_pattern), "%s%s", boundary_patterns[i], boundary);
+//         file_content_end = strstr(file_content_start, end_pattern);
+        
+//         if (file_content_end) {
+//             printf("Found content end with pattern: '%s'\n", end_pattern);
+//             break;
+//         }
+//     }
+
+//     if (!file_content_end) {
+//         // Last resort: search for any boundary-like pattern
+//         char simple_pattern[110];
+//         snprintf(simple_pattern, sizeof(simple_pattern), "--%s", boundary);
+//         file_content_end = strstr(file_content_start, simple_pattern);
+        
+//         if (file_content_end) {
+//             printf("Found content end with simple pattern: '%s'\n", simple_pattern);
+//         }
+//     }
+
+//     if (!file_content_end) {
+//         printf("Error: Could not find file content end\n");
+//         printf("Content starts with: ");
+//         for (int i = 0; i < 50 && file_content_start[i] != '\0'; i++) {
+//             if (isprint(file_content_start[i])) {
+//                 printf("%c", file_content_start[i]);
+//             } else {
+//                 printf("\\x%02X", (unsigned char)file_content_start[i]);
+//             }
+//         }
+//         printf("\n");
+//         return false;
+//     }
+
+//     // 8. Calculate file size (remove trailing CRLF if present)
+//     file_size = file_content_end - file_content_start;
+    
+//     // Check for trailing \r\n before boundary
+//     if (file_size >= 2 && 
+//         file_content_end[-2] == '\r' && 
+//         file_content_end[-1] == '\n') {
+//         file_size -= 2;
+//         printf("Removed trailing \\r\\n\n");
+//     }
+//     // Check for trailing \n before boundary
+//     else if (file_size >= 1 && file_content_end[-1] == '\n') {
+//         file_size -= 1;
+//         printf("Removed trailing \\n\n");
+//     }
+
+//     printf("File content size: %zu bytes\n", file_size);
+
+//     // 9. Create directory and save file
+//     char directory[512];
+//     snprintf(directory, sizeof(directory), "user_files/%s%s", username, decoded_path);
+//     create_full_path(directory, 0777);
+    
 //     FILE *file = fopen(filepath, "wb");
 //     if (!file) {
-//         perror("Failed to open file for writing");
+//         perror("Failed to create file");
+//         return false;
+//     }
+    
+//     size_t written = fwrite(file_content_start, 1, file_size, file);
+//     fclose(file);
+    
+//     printf("Written %zu bytes to %s\n", written, filepath);
+    
+//     // 10. Verify the file
+//     if (written != file_size) {
+//         printf("Error: File size mismatch (expected %zu, got %zu)\n", file_size, written);
 //         return false;
 //     }
 
-  
-//     size_t initial_bytes = strlen(request) - (file_body_start - request);
-// fwrite(file_body_start, 1, initial_bytes, file);
-
-// // Read the rest of the file directly from the socket in chunks and write to disk
-// char read_buffer[BUFFER_SIZE];
-// int bytes_received;
-
-// while ((bytes_received = recv(client_socket, read_buffer, BUFFER_SIZE, 0)) > 0) {
-//     char end_boundary_marker[boundary_len + 5];
-//     snprintf(end_boundary_marker, sizeof(end_boundary_marker), "\r\n--%.*s--", (int)boundary_len, boundary_start);
-//     char *boundary_in_buffer = strstr(read_buffer, end_boundary_marker);
-
-//     if (boundary_in_buffer) {
-//         size_t bytes_to_write = boundary_in_buffer - read_buffer;
-//         fwrite(read_buffer, 1, bytes_to_write, file);
-//         break; // End of file data
-//     } else {
-//         fwrite(read_buffer, 1, bytes_received, file);
+//     // Read back to verify content
+//     FILE *verify = fopen(filepath, "rb");
+//     if (verify) {
+//         char first_bytes[100];
+//         size_t read = fread(first_bytes, 1, sizeof(first_bytes) - 1, verify);
+//         first_bytes[read] = '\0';
+//         fclose(verify);
+        
+//         printf("File starts with: ");
+//         for (size_t i = 0; i < (read < 50 ? read : 50); i++) {
+//             if (isprint(first_bytes[i])) {
+//                 printf("%c", first_bytes[i]);
+//             } else {
+//                 printf("\\x%02X", (unsigned char)first_bytes[i]);
+//             }
+//         }
+//         printf("\n");
 //     }
-// }
-
-//     fclose(file);
-//     pthread_mutex_unlock(&file_mutex);
+    
+//     printf("SUCCESS: File uploaded successfully!\n");
 //     return true;
 // }
+int http_handle_upload(const char *request, const char* username) {
+    // 1. Find the multipart boundary
+    const char *boundary_start = strstr(request, "boundary=");
+    if (!boundary_start) return 0;
+    boundary_start += strlen("boundary=");
+    char boundary[128];
+    char *boundary_end = strchr(boundary_start, '\r');
+    if (!boundary_end) return 0;
+    size_t boundary_len = boundary_end - boundary_start;
+    strncpy(boundary, boundary_start, boundary_len);
+    boundary[boundary_len] = '\0';
+    
+    // 2. Find the start and end of the file data.
+    // The file data starts after the second \r\n\r\n
+    const char* part_headers_end = strstr(request, "\r\n\r\n");
+    if (!part_headers_end) return 0;
+    const char* data_start = part_headers_end + 4;
+
+    // Find the closing boundary line, which includes the trailing hyphens.
+    char closing_boundary_line[256];
+    snprintf(closing_boundary_line, sizeof(closing_boundary_line), "\r\n--%s--", boundary);
+
+    const char *file_end_boundary = strstr(data_start, closing_boundary_line);
+    if (!file_end_boundary) return 0;
+
+    // Calculate the length of the file content
+    size_t data_len = file_end_boundary - data_start;
+    
+    // 3. Find the filename in the headers
+    const char *file_content_start = strstr(request, "filename=\"");
+    if (!file_content_start) return 0;
+    file_content_start += strlen("filename=\"");
+    char *file_name_end = strchr(file_content_start, '\"');
+    if (!file_name_end) return 0;
+    
+    char file_name[256];
+    size_t file_name_len = file_name_end - file_content_start;
+    
+    // Check for an empty filename. This prevents the "Is a directory" error.
+    if (file_name_len == 0) {
+        return 0; // Return failure to prevent writing to a directory
+    }
+    
+    strncpy(file_name, file_content_start, file_name_len);
+    file_name[file_name_len] = '\0';
+    
+    // 4. Create the user's directory if it doesn't exist
+    char user_dir[256];
+    snprintf(user_dir, sizeof(user_dir), "user_files/%s", username);
+    if (mkdir(user_dir, 0777) != 0 && errno != EEXIST) {
+        perror("Error creating user directory");
+        return 0;
+    }
+    
+    // 5. Write the file content to disk
+    char file_path[512];
+    snprintf(file_path, sizeof(file_path), "%s/%s", user_dir, file_name);
+    
+    FILE *fp = fopen(file_path, "wb");
+    if (!fp) {
+        perror("Error opening file for writing");
+        return 0;
+    }
+    
+    // Only write if there is content to write
+    if (data_len > 0) {
+        fwrite(data_start, 1, data_len, fp);
+    }
+    
+    fclose(fp);
+    
+    return 1;
+}        
 
 /**
  * @brief Handles a POST request to delete a file.
@@ -1020,8 +1131,9 @@ bool http_handle_delete_file(const char *request, const char *username) {
             perror("Failed to delete file");
         }
     }
-    pthread_mutex_unlock(&file_mutex);
     return false;
+    pthread_mutex_unlock(&file_mutex);
+    
 }
 
 
@@ -1133,68 +1245,7 @@ void http_handle_view_file(int client_socket, const char *url, const char *usern
     fclose(file);
 }
 
-// void http_handle_view_file(int client_socket, const char *url, const char *username) {
-//     char filename[256];
-//     const char *file_param = strstr(url, "file=");
-//     if (!file_param) {
-//         http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
-//         return;
-//     }
-//     file_param += strlen("file=");
-//     urldecode(filename, file_param);
-    
-//     char filepath[512];
-//     snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
-    
-//     FILE *file = fopen(filepath, "rb");
-//     if (!file) {
-//         http_send_response(client_socket, 404, "text/plain", "File Not Found", 14);
-//         return;
-//     }
-    
-//     fseek(file, 0, SEEK_END);
-//     long file_size = ftell(file);
-//     fseek(file, 0, SEEK_SET);
-    
-//     char *file_content = malloc(file_size);
-//     if (!file_content) {
-//         fclose(file);
-//         http_send_response(client_socket, 500, "text/plain", "Internal Server Error", 21);
-//         return;
-//     }
-    
-//     fread(file_content, 1, file_size, file);
-//     fclose(file);
-    
-//     char response_body[file_size + 1024];
-//     snprintf(response_body, sizeof(response_body),
-//              "<!DOCTYPE html>"
-//              "<html lang='en'>"
-//              "<head>"
-//              "    <meta charset='UTF-8'>"
-//              "    <title>View File: %s</title>"
-//              "    <style>"
-//              "        body { font-family: sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; }"
-//              "        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }"
-//              "        pre { background-color: #f9f9f9; padding: 15px; border-radius: 4px; overflow: auto; white-space: pre-wrap; word-wrap: break-word; }"
-//              "        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }"
-//              "        .back-btn { padding: 8px 16px; background-color: #1a73e8; color: #fff; text-decoration: none; border-radius: 4px; }"
-//              "    </style>"
-//              "</head>"
-//              "<body>"
-//              "    <div class='container'>"
-//              "        <div class='header'>"
-//              "            <h1>Viewing File: %s</h1>"
-//              "            <a href='/dashboard' class='back-btn'>Back to Dashboard</a>"
-//              "        </div>"
-//              "        <pre>%s</pre>"
-//              "    </div>"
-//              "</body>"
-//              "</html>", filename, filename, file_content);
-             
-//     http_send_response(client_socket, 200, "text/html", response_body, strlen(response_body));
-//     free(file_content);
-// }
+
 /**
  * @brief Handles a GET request to download a file.
  * @param client_socket The client socket.
@@ -1294,62 +1345,5 @@ int get_post_param(const char *body, const char *param_name, char *output, size_
  * @param username The username of the session.
  * @return true on success, false on failure.
  */
-// bool http_handle_upload(const char *request, const char *username) {
-//     // Find boundary string
-//     const char *boundary_start = strstr(request, "boundary=");
-//     if (!boundary_start) return false;
-//     boundary_start += strlen("boundary=");
-//     const char *boundary_end = strstr(boundary_start, "\r\n");
-//     if (!boundary_end) return false;
-//     size_t boundary_len = boundary_end - boundary_start;
-    
-//     char boundary[boundary_len + 3];
-//     snprintf(boundary, sizeof(boundary), "--%.*s", (int)boundary_len, boundary_start);
-    
-//     // Find filename
-//     const char *filename_start = strstr(request, "filename=\"");
-//     if (!filename_start) return false;
-//     filename_start += strlen("filename=\"");
-//     const char *filename_end = strchr(filename_start, '"');
-//     if (!filename_end) return false;
-//     size_t filename_len = filename_end - filename_start;
-    
-//     char filename[256];
-//     if (filename_len >= sizeof(filename)) {
-//         return false;
-//     }
-//     strncpy(filename, filename_start, filename_len);
-//     filename[filename_len] = '\0';
-    
-//     // Find the body start
-//     const char *body_start = strstr(filename_end, "\r\n\r\n");
-//     if (!body_start) return false;
-//     body_start += 4;
-    
-//     // Find body end
-//     char end_boundary[boundary_len + 5];
-//     snprintf(end_boundary, sizeof(end_boundary), "\r\n%s--", boundary);
-//     const char *body_end = strstr(body_start, end_boundary);
-//     if (!body_end) return false;
-//     size_t content_len = body_end - body_start;
-    
-//     // Ensure the user directory exists
-//     char user_path[256];
-//     snprintf(user_path, sizeof(user_path), "user_files/%s", username);
-//     mkdir(user_path, 0777);
-    
-//     char filepath[512];
-//     snprintf(filepath, sizeof(filepath), "%s/%s", user_path, filename);
-    
-//     FILE *file = fopen(filepath, "wb");
-//     if (!file) {
-//         perror("Failed to open file for writing");
-//         return false;
-//     }
-    
-//     fwrite(body_start, 1, content_len, file);
-//     fclose(file);
-    
-//     return true;
-// }
+
 
