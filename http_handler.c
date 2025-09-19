@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include<sys/socket.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
@@ -172,105 +172,6 @@ char* read_full_request(int c, size_t *request_size) {
     printf("Read complete request: %zu bytes\n", total_received);
     return request;
 }
-
-
-// char* read_full_request(int client_socket, size_t *total_size_out) {
-//     char *request = NULL;
-//     size_t total_size = 0;
-//     ssize_t bytes_received;
-//     char buffer[4096];
-//     int content_length = -1;
-//     int headers_received = 0;
-
-//     // Read headers first
-//     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-//         printf("Received %zd bytes in header phase\n", bytes_received);
-        
-//         char *new_request = realloc(request, total_size + bytes_received + 1);
-//         if (!new_request) {
-//             printf("Realloc failed at header phase\n");
-//             free(request);
-//             return NULL;
-//         }
-//         request = new_request;
-        
-//         memcpy(request + total_size, buffer, bytes_received);
-//         total_size += bytes_received;
-//         request[total_size] = '\0';
-
-//         // Check for end of headers
-//         char *header_end = strstr(request, "\r\n\r\n");
-//         if (header_end) {
-//             headers_received = 1;
-            
-//             // Extract Content-Length
-//             char *cl_header = strstr(request, "Content-Length:");
-//             if (cl_header) {
-//                 content_length = atoi(cl_header + strlen("Content-Length:"));
-//                 printf("Content-Length: %d\n", content_length);
-//             }
-//             break;
-//         }
-        
-//         if (total_size > 16384) {
-//             printf("Header size limit exceeded\n");
-//             break;
-//         }
-//     }
-
-//     if (!headers_received || bytes_received <= 0) {
-//         printf("Failed to read headers\n");
-//         free(request);
-//         return NULL;
-//     }
-
-//     // Calculate total expected request size
-//     char *body_start = strstr(request, "\r\n\r\n") + 4;
-//     size_t headers_size = body_start - request;
-//     size_t total_expected_size = headers_size + content_length;
-
-//     printf("Headers size: %zu, Expected total: %zu, Current: %zu\n", 
-//            headers_size, total_expected_size, total_size);
-
-//     // Read remaining data
-//     while (total_size < total_expected_size) {
-//         size_t remaining = total_expected_size - total_size;
-//         size_t to_read = (remaining < sizeof(buffer)) ? remaining : sizeof(buffer);
-        
-//         bytes_received = recv(client_socket, buffer, to_read, 0);
-//         if (bytes_received <= 0) {
-//             printf("Recv error or connection closed. Expected: %zu, Got: %zu\n", 
-//                    total_expected_size, total_size);
-//             break;
-//         }
-        
-//         printf("Received %zd bytes in body phase\n", bytes_received);
-        
-//         char *new_request = realloc(request, total_size + bytes_received + 1);
-//         if (!new_request) {
-//             printf("Realloc failed for %zu bytes\n", total_size + bytes_received);
-//             free(request);
-//             return NULL;
-//         }
-//         request = new_request;
-        
-//         memcpy(request + total_size, buffer, bytes_received);
-//         total_size += bytes_received;
-        
-//         printf("Progress: %zu/%zu bytes (%.1f%%)\n", 
-//                total_size, total_expected_size,
-//                ((double)total_size / total_expected_size) * 100);
-//     }
-
-//     request[total_size] = '\0';
-    
-//     if (total_size_out) {
-//         *total_size_out = total_size;
-//     }
-    
-//     printf("Final total request size: %zu bytes\n", total_size);
-//     return request;
-// }
 
 
 /**
@@ -595,7 +496,6 @@ if (php_ext && *(php_ext + 4) == '\0') {
 
 
 
-
 /**
  * @brief Sends the login page to the client.
  * @param client_socket The client socket.
@@ -696,8 +596,9 @@ void http_send_welcome_page(int client_socket) {
         "</head>"
         "<body>"
         "    <div class='welcome-container'>"
-        "        <h1>Welcome to File Manager</h1>"
+        "        <h1>Welcome to Web server</h1>"
         "        <p>Your secure and simple file management solution.</p>"
+        "        <p>We provide Support for HTTP and HTTPS and Server Side Scripting.</p>"
         "        <div class='btn-group'>"
         "            <a href='/login' class='btn-login'>Login</a>"
         "            <a href='/register' class='btn-register'>Register</a>"
@@ -1210,6 +1111,256 @@ int http_handle_upload(const char *full_request, const char *username) {
     // Convert: 0 (success) -> 1, -1 (failure) -> 0
     return (result == 0) ? 1 : 0;
 }
+     
+
+/**
+ * @brief Handles a POST request to delete a file.
+ * @param request The full HTTP request string.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+bool http_handle_delete_file(const char *request, const char *username) {
+    pthread_mutex_lock(&file_mutex);
+    char filename[256];
+    char path[256] = "/";
+    const char *body = strstr(request, "\r\n\r\n") + 4;
+    
+    // Get filename and path from POST body
+    if (get_post_param(body, "filename", filename, sizeof(filename)) &&
+        get_post_param(body, "path", path, sizeof(path))) {
+        
+        // Ensure path is properly decoded before use
+        char decoded_path[256];
+        urldecode(decoded_path, path);
+
+        char filepath[640];
+        // Correctly join the base user directory, the decoded path, and the filename.
+        snprintf(filepath, sizeof(filepath), "user_files/%s%s%s", username, decoded_path, filename);
+        
+        printf("Attempting to delete file: %s\n", filepath);
+        
+        if (remove(filepath) == 0) {
+            printf("Successfully deleted file.\n");
+            return true;
+        } else {
+            perror("Failed to delete file");
+        }
+    }
+    return false;
+    pthread_mutex_unlock(&file_mutex);
+    
+}
+
+
+
+/**
+ * @brief Handles a POST request to delete a folder.
+ * @param request The full HTTP request string.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+bool http_handle_delete_folder(const char *request,const char *username){
+    
+    char foldername[256];
+    char path[256] = "/";
+    const char *body = strstr(request, "\r\n\r\n") + 4;
+
+    if (get_post_param(body, "foldername", foldername, sizeof(foldername)) && 
+    get_post_param(body, "path", path, sizeof(path))) {
+
+    // URL-decode the path parameter
+    char decoded_path[256];
+    urldecode(decoded_path, path);
+    char folderpath[640];
+    // Correct the typo: "users_files" -> "user_files"
+    snprintf(folderpath, sizeof(folderpath), "user_files/%s%s%s", username, decoded_path, foldername);
+    
+
+    if (rmdir(folderpath) == 0) {
+            printf("Folder deleted successfully: %s \n", folderpath);
+            fflush(stdout);
+            return true;
+        } else {
+            perror("Failed to delete Folder");
+        }
+   }
+   return false; 
+}
+
+// A helper function to check for specific file extensions.
+bool has_file_extension(const char *url, const char *ext) {
+    const char *dot = strrchr(url, '.');
+    if (!dot || dot == url) return false;
+    return strcmp(dot, ext) == 0;
+}
+/**
+ * @brief Handles a GET request to view a file.
+ * @param client_socket The client socket.
+ * @param url The request URL containing the filename.
+ * @param username The username of the session.
+ */
+// In http_handler.c
+
+void http_handle_view_file(int client_socket, const char *url, const char *username) {
+    char decoded_path[256];
+    const char *file_param = strstr(url, "file=");
+    if (!file_param) {
+        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing 'file' parameter", 37);
+        return;
+    }
+    urldecode(decoded_path, file_param + 5);
+
+   //new logic
+    if (has_file_extension(url, ".php")) {
+        // Block all attempts to view PHP source code
+        http_send_response(client_socket, 403, "text/plain", "Forbidden", 9);
+        return;
+    }
+
+    char file_path[512];
+    snprintf(file_path, sizeof(file_path), "user_files/%s%s", username, decoded_path);
+
+    FILE *file = fopen(file_path, "r");
+    if (!file) {
+        http_send_response(client_socket, 404, "text/plain", "File not found.", 15);
+        return;
+    }
+
+    // Determine the content type based on the file extension
+    char *content_type = "text/plain"; // Default
+    if (strstr(file_path, ".html")) {
+        content_type = "text/html";
+    } else if (strstr(file_path, ".css")) {
+        content_type = "text/css";
+    } else if (strstr(file_path, ".js")) {
+        content_type = "application/javascript";
+    } else if (strstr(file_path, ".jpg") || strstr(file_path, ".jpeg")) {
+        content_type = "image/jpeg";
+    } else if (strstr(file_path, ".png")) {
+        content_type = "image/png";
+    }
+    // Add more file types as needed...
+
+    // Send HTTP headers
+    char header[512];
+    snprintf(header, sizeof(header),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: %s\r\n"
+             "\r\n",
+             content_type);
+    write(client_socket, header, strlen(header));
+
+    // Send the file content
+    char buffer[1024];
+    size_t bytes_read;
+    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        write(client_socket, buffer, bytes_read);
+    }
+
+    fclose(file);
+}
+
+
+/**
+ * @brief Handles a GET request to download a file.
+ * @param client_socket The client socket.
+ * @param url The request URL containing the filename.
+ * @param username The username of the session.
+ */
+void http_send_file_for_download(int client_socket, const char *url, const char *username) {
+    char filename[256];
+    const char *file_param = strstr(url, "file=");
+    if (!file_param) {
+        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
+        return;
+    }
+    file_param += strlen("file=");
+    urldecode(filename, file_param);
+    
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
+    
+    FILE *file = fopen(filepath, "rb");
+    if (!file) {
+        http_send_response(client_socket, 404, "text/plain", "File Not Found", 14);
+        return;
+    }
+    
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    char *file_content = malloc(file_size);
+    if (!file_content) {
+        fclose(file);
+        http_send_response(client_socket, 500, "text/plain", "Internal Server Error", 21);
+        return;
+    }
+    
+    fread(file_content, 1, file_size, file);
+    fclose(file);
+    
+    char header_buffer[1024];
+    snprintf(header_buffer, sizeof(header_buffer),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/octet-stream\r\n"
+             "Content-Disposition: attachment; filename=\"%s\"\r\n"
+             "Content-Length: %ld\r\n"
+             "Connection: close\r\n"
+             "\r\n", filename, file_size);
+             
+    send(client_socket, header_buffer, strlen(header_buffer), 0);
+    send(client_socket, file_content, file_size, 0);
+    
+    free(file_content);
+}
+
+/**
+ * @brief Helper function to get a parameter from a URL-encoded POST body.
+ * @param body The URL-encoded string.
+ * @param param_name The name of the parameter to find.
+ * @param output The buffer to store the result.
+ * @param output_size The size of the output buffer.
+ * @return 1 on success, 0 on failure.
+ */
+int get_post_param(const char *body, const char *param_name, char *output, size_t output_size) {
+    if (!body || !param_name || !output) {
+        return 0;
+    }
+
+    char search_string[256];
+    snprintf(search_string, sizeof(search_string), "%s=", param_name);
+    
+    const char *start = strstr(body, search_string);
+    if (!start) {
+        return 0;
+    }
+    start += strlen(search_string);
+    
+    const char *end = strchr(start, '&');
+    size_t len;
+    if (end) {
+        len = end - start;
+    } else {
+        len = strlen(start);
+    }
+    
+    if (len >= output_size) {
+        return 0;
+    }
+    
+    strncpy(output, start, len);
+    output[len] = '\0';
+    return 1;
+}
+
+/**
+ * @brief Handles a multipart/form-data file upload request.
+ * @param request The full HTTP request string.
+ * @param username The username of the session.
+ * @return true on success, false on failure.
+ */
+
 
 //  bool http_handle_upload(int client_socket, const char *full_request, const char *username, int content_length) {
 //     printf("=== BULLETPROOF UPLOAD HANDLER ===\n");
@@ -1516,254 +1667,102 @@ int http_handle_upload(const char *full_request, const char *username) {
 //     fclose(fp);
     
 //     return 1;
-// }        
+// }   
 
-/**
- * @brief Handles a POST request to delete a file.
- * @param request The full HTTP request string.
- * @param username The username of the session.
- * @return true on success, false on failure.
- */
-bool http_handle_delete_file(const char *request, const char *username) {
-    pthread_mutex_lock(&file_mutex);
-    char filename[256];
-    char path[256] = "/";
-    const char *body = strstr(request, "\r\n\r\n") + 4;
-    
-    // Get filename and path from POST body
-    if (get_post_param(body, "filename", filename, sizeof(filename)) &&
-        get_post_param(body, "path", path, sizeof(path))) {
+// char* read_full_request(int client_socket, size_t *total_size_out) {
+//     char *request = NULL;
+//     size_t total_size = 0;
+//     ssize_t bytes_received;
+//     char buffer[4096];
+//     int content_length = -1;
+//     int headers_received = 0;
+
+//     // Read headers first
+//     while ((bytes_received = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
+//         printf("Received %zd bytes in header phase\n", bytes_received);
         
-        // Ensure path is properly decoded before use
-        char decoded_path[256];
-        urldecode(decoded_path, path);
-
-        char filepath[640];
-        // Correctly join the base user directory, the decoded path, and the filename.
-        snprintf(filepath, sizeof(filepath), "user_files/%s%s%s", username, decoded_path, filename);
+//         char *new_request = realloc(request, total_size + bytes_received + 1);
+//         if (!new_request) {
+//             printf("Realloc failed at header phase\n");
+//             free(request);
+//             return NULL;
+//         }
+//         request = new_request;
         
-        printf("Attempting to delete file: %s\n", filepath);
+//         memcpy(request + total_size, buffer, bytes_received);
+//         total_size += bytes_received;
+//         request[total_size] = '\0';
+
+//         // Check for end of headers
+//         char *header_end = strstr(request, "\r\n\r\n");
+//         if (header_end) {
+//             headers_received = 1;
+            
+//             // Extract Content-Length
+//             char *cl_header = strstr(request, "Content-Length:");
+//             if (cl_header) {
+//                 content_length = atoi(cl_header + strlen("Content-Length:"));
+//                 printf("Content-Length: %d\n", content_length);
+//             }
+//             break;
+//         }
         
-        if (remove(filepath) == 0) {
-            printf("Successfully deleted file.\n");
-            return true;
-        } else {
-            perror("Failed to delete file");
-        }
-    }
-    return false;
-    pthread_mutex_unlock(&file_mutex);
+//         if (total_size > 16384) {
+//             printf("Header size limit exceeded\n");
+//             break;
+//         }
+//     }
+
+//     if (!headers_received || bytes_received <= 0) {
+//         printf("Failed to read headers\n");
+//         free(request);
+//         return NULL;
+//     }
+
+//     // Calculate total expected request size
+//     char *body_start = strstr(request, "\r\n\r\n") + 4;
+//     size_t headers_size = body_start - request;
+//     size_t total_expected_size = headers_size + content_length;
+
+//     printf("Headers size: %zu, Expected total: %zu, Current: %zu\n", 
+//            headers_size, total_expected_size, total_size);
+
+//     // Read remaining data
+//     while (total_size < total_expected_size) {
+//         size_t remaining = total_expected_size - total_size;
+//         size_t to_read = (remaining < sizeof(buffer)) ? remaining : sizeof(buffer);
+        
+//         bytes_received = recv(client_socket, buffer, to_read, 0);
+//         if (bytes_received <= 0) {
+//             printf("Recv error or connection closed. Expected: %zu, Got: %zu\n", 
+//                    total_expected_size, total_size);
+//             break;
+//         }
+        
+//         printf("Received %zd bytes in body phase\n", bytes_received);
+        
+//         char *new_request = realloc(request, total_size + bytes_received + 1);
+//         if (!new_request) {
+//             printf("Realloc failed for %zu bytes\n", total_size + bytes_received);
+//             free(request);
+//             return NULL;
+//         }
+//         request = new_request;
+        
+//         memcpy(request + total_size, buffer, bytes_received);
+//         total_size += bytes_received;
+        
+//         printf("Progress: %zu/%zu bytes (%.1f%%)\n", 
+//                total_size, total_expected_size,
+//                ((double)total_size / total_expected_size) * 100);
+//     }
+
+//     request[total_size] = '\0';
     
-}
-
-
-
-/**
- * @brief Handles a POST request to delete a folder.
- * @param request The full HTTP request string.
- * @param username The username of the session.
- * @return true on success, false on failure.
- */
-bool http_handle_delete_folder(const char *request,const char *username){
+//     if (total_size_out) {
+//         *total_size_out = total_size;
+//     }
     
-    char foldername[256];
-    char path[256] = "/";
-    const char *body = strstr(request, "\r\n\r\n") + 4;
-
-    if (get_post_param(body, "foldername", foldername, sizeof(foldername)) && 
-    get_post_param(body, "path", path, sizeof(path))) {
-
-    // URL-decode the path parameter
-    char decoded_path[256];
-    urldecode(decoded_path, path);
-    char folderpath[640];
-    // Correct the typo: "users_files" -> "user_files"
-    snprintf(folderpath, sizeof(folderpath), "user_files/%s%s%s", username, decoded_path, foldername);
-    
-
-    if (rmdir(folderpath) == 0) {
-            printf("Folder deleted successfully: %s \n", folderpath);
-            fflush(stdout);
-            return true;
-        } else {
-            perror("Failed to delete Folder");
-        }
-   }
-   return false; 
-}
-
-// A helper function to check for specific file extensions.
-bool has_file_extension(const char *url, const char *ext) {
-    const char *dot = strrchr(url, '.');
-    if (!dot || dot == url) return false;
-    return strcmp(dot, ext) == 0;
-}
-/**
- * @brief Handles a GET request to view a file.
- * @param client_socket The client socket.
- * @param url The request URL containing the filename.
- * @param username The username of the session.
- */
-// In http_handler.c
-
-void http_handle_view_file(int client_socket, const char *url, const char *username) {
-    char decoded_path[256];
-    const char *file_param = strstr(url, "file=");
-    if (!file_param) {
-        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing 'file' parameter", 37);
-        return;
-    }
-    urldecode(decoded_path, file_param + 5);
-
-   //new logic
-    if (has_file_extension(url, ".php")) {
-        // Block all attempts to view PHP source code
-        http_send_response(client_socket, 403, "text/plain", "Forbidden", 9);
-        return;
-    }
-
-    char file_path[512];
-    snprintf(file_path, sizeof(file_path), "user_files/%s%s", username, decoded_path);
-
-    FILE *file = fopen(file_path, "r");
-    if (!file) {
-        http_send_response(client_socket, 404, "text/plain", "File not found.", 15);
-        return;
-    }
-
-    // Determine the content type based on the file extension
-    char *content_type = "text/plain"; // Default
-    if (strstr(file_path, ".html")) {
-        content_type = "text/html";
-    } else if (strstr(file_path, ".css")) {
-        content_type = "text/css";
-    } else if (strstr(file_path, ".js")) {
-        content_type = "application/javascript";
-    } else if (strstr(file_path, ".jpg") || strstr(file_path, ".jpeg")) {
-        content_type = "image/jpeg";
-    } else if (strstr(file_path, ".png")) {
-        content_type = "image/png";
-    }
-    // Add more file types as needed...
-
-    // Send HTTP headers
-    char header[512];
-    snprintf(header, sizeof(header),
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: %s\r\n"
-             "\r\n",
-             content_type);
-    write(client_socket, header, strlen(header));
-
-    // Send the file content
-    char buffer[1024];
-    size_t bytes_read;
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        write(client_socket, buffer, bytes_read);
-    }
-
-    fclose(file);
-}
-
-
-/**
- * @brief Handles a GET request to download a file.
- * @param client_socket The client socket.
- * @param url The request URL containing the filename.
- * @param username The username of the session.
- */
-void http_send_file_for_download(int client_socket, const char *url, const char *username) {
-    char filename[256];
-    const char *file_param = strstr(url, "file=");
-    if (!file_param) {
-        http_send_response(client_socket, 400, "text/plain", "Bad Request: Missing filename", 29);
-        return;
-    }
-    file_param += strlen("file=");
-    urldecode(filename, file_param);
-    
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), "user_files/%s%s", username, filename);
-    
-    FILE *file = fopen(filepath, "rb");
-    if (!file) {
-        http_send_response(client_socket, 404, "text/plain", "File Not Found", 14);
-        return;
-    }
-    
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    char *file_content = malloc(file_size);
-    if (!file_content) {
-        fclose(file);
-        http_send_response(client_socket, 500, "text/plain", "Internal Server Error", 21);
-        return;
-    }
-    
-    fread(file_content, 1, file_size, file);
-    fclose(file);
-    
-    char header_buffer[1024];
-    snprintf(header_buffer, sizeof(header_buffer),
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: application/octet-stream\r\n"
-             "Content-Disposition: attachment; filename=\"%s\"\r\n"
-             "Content-Length: %ld\r\n"
-             "Connection: close\r\n"
-             "\r\n", filename, file_size);
-             
-    send(client_socket, header_buffer, strlen(header_buffer), 0);
-    send(client_socket, file_content, file_size, 0);
-    
-    free(file_content);
-}
-
-/**
- * @brief Helper function to get a parameter from a URL-encoded POST body.
- * @param body The URL-encoded string.
- * @param param_name The name of the parameter to find.
- * @param output The buffer to store the result.
- * @param output_size The size of the output buffer.
- * @return 1 on success, 0 on failure.
- */
-int get_post_param(const char *body, const char *param_name, char *output, size_t output_size) {
-    if (!body || !param_name || !output) {
-        return 0;
-    }
-
-    char search_string[256];
-    snprintf(search_string, sizeof(search_string), "%s=", param_name);
-    
-    const char *start = strstr(body, search_string);
-    if (!start) {
-        return 0;
-    }
-    start += strlen(search_string);
-    
-    const char *end = strchr(start, '&');
-    size_t len;
-    if (end) {
-        len = end - start;
-    } else {
-        len = strlen(start);
-    }
-    
-    if (len >= output_size) {
-        return 0;
-    }
-    
-    strncpy(output, start, len);
-    output[len] = '\0';
-    return 1;
-}
-
-/**
- * @brief Handles a multipart/form-data file upload request.
- * @param request The full HTTP request string.
- * @param username The username of the session.
- * @return true on success, false on failure.
- */
-
-
+//     printf("Final total request size: %zu bytes\n", total_size);
+//     return request;
+// }
